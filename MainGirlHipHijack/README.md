@@ -1,16 +1,15 @@
 ﻿# MainGirlHipHijack
 
-A BepInEx plugin for KoikatsuSunshine H-scenes that provides female full-body IK control, gizmo editing, pose presets, and VR-assisted manipulation.
-
-Japanese version: [README_ja.md](README_ja.md)
+A BepInEx plugin for KoikatsuSunshine H-scenes that focuses on female full-body IK control, runtime gizmo editing, follow-target workflows, and pose preset automation.
 
 ## Status
 
 - Beta
 - Female workflow is the primary supported path
-- Male-control UI is currently hidden (temporarily sealed), but female bone-follow can still target male bones and HMD as follow candidates
+- Male-control UI is currently sealed (`MaleFeaturesTemporarilySealed = true`)
+- Female follow-target candidates can still include male bones and HMD when available
 
-## Main Features
+## Core Features
 
 - Female BodyIK control for 13 effectors:
   - Left/Right Hand
@@ -20,90 +19,69 @@ Japanese version: [README_ja.md](README_ja.md)
   - Left/Right Elbow
   - Left/Right Knee
   - Body (hip center)
-- Per-effector:
+- Per-effector controls:
   - Enable/disable
   - Weight (0..1)
   - Gizmo visibility
   - Reset to current animation pose
-- Bone follow:
-  - `Nearest Follow` snaps to nearest valid follow target
-  - Follow target candidates include:
-    - female body bones (filtered)
-    - male body bones (filtered, minimal set rules)
-    - HMD (when VR pose is available)
-- VR operations:
+- Bone follow workflow:
+  - `Nearest Follow` snap
+  - Filtered candidate sets for female bones, male bones, and HMD
+- VR interaction:
   - VR grab mode for IK proxies
-  - Female head grab with additive rotation behavior
-- Pose presets (female):
-  - Save/load with screenshot
-  - Auto-apply by matching posture
-  - Transition easing (Linear / SmoothStep / EaseOut)
-  - Includes female head additive rotation state in save/load
-- H-scene speed/hip linkage tools:
+  - Female head additive-rotation grab behavior
+- Female pose presets:
+  - Save/load with screenshots
+  - Auto-apply by posture matching
+  - Transition easing (`Linear`, `SmoothStep`, `EaseOut`)
+- H-scene linkage tools:
   - Body-to-controller link
   - Speed gauge hijack
-  - Female animation speed cut option
+  - Optional female animation speed cut
 
-## Requirements
-
-- KoikatsuSunshine
-- BepInEx 5.x
-
-## Dependencies
-
-These are hard dependencies declared in the plugin:
+## Hard Dependencies
 
 - `MainGameTransformGizmo`
 - `MainGameUiInputCapture`
 - `MainGameLogRelay`
 
-## Installation
+## Optional Companion Plugin
 
-Place built DLLs under:
+- `MainGirlShoulderIkStabilizer` (separate plugin, not a hard dependency)
 
-`BepInEx/plugins/canon_plugins/`
+## Runtime Targets
 
-Minimum required set:
+- `KoikatsuSunshine`
+- `KoikatsuSunshine_VR`
+
+## Files In This Folder
 
 - `MainGirlHipHijack.dll`
-- `MainGameTransformGizmo.dll`
-- `MainGameUiInputCapture.dll`
-- `MainGameLogRelay.dll`
+- `FullIkGizmoSettings.json`
+- `pose_presets/` (female presets)
+- `pose_presets_male/` (male preset data container used by current build)
 
-## Configuration
+## Config / Logging
 
-Runtime settings file:
+ConfigManager keys (plugin GUID: `com.kks.main.girlbodyikgizmo`):
 
-`BepInEx/plugins/canon_plugins/FullIkGizmoSettings.json`
+- `General/Enabled`
+- `UI/Visible`
+- `Logging/EnableLogs`
 
-Notes:
+When `Logging/EnableLogs` is ON, logs are routed via `MainGameLogRelay` using owner keys:
 
-- The file is generated automatically on first launch
-- Values are normalized/clamped on load/save
-- Volatile per-session IK on/off states are reset on startup
+- `com.kks.main.girlbodyikgizmo`
+- `com.kks.main.girlbodyikgizmo.input`
 
-## Known Issues
+## Build (Source)
 
-See:
-
-- [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
-
-## Build (source)
-
-Target framework: `net472`
-
-Build:
-
-`dotnet build MainGirlHipHijack.csproj -c Release`
-
-Output:
-
-`bin/Release/net472/MainGirlHipHijack.dll`
+- Target framework: `net472`
+- Build command: `dotnet build MainGirlHipHijack.csproj -c Release`
+- Output DLL: `bin/Release/net472/MainGirlHipHijack.dll`
 
 ## Plugin Info
 
 - GUID: `com.kks.main.girlbodyikgizmo`
 - Name: `MainGirlHipHijack`
 - Version: `1.0.0`
-- Process: `KoikatsuSunshine`, `KoikatsuSunshine_VR`
-
