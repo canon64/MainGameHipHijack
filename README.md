@@ -9,8 +9,9 @@ Japanese version: [README_ja.md](README_ja.md)
 - `MainGirlHipHijack` - Female BodyIK control, gizmo editing, pose preset automation.
 - `MainGameTransformGizmo` - Runtime transform gizmo for IK/object manipulation.
 - `MainGameUiInputCapture` - Unified UI/input capture guard for drag/edit operations.
-- `MainGirlShoulderIkStabilizer` - Shoulder IK stabilization helper.
+- `MainGirlShoulderIkStabilizer` - Shoulder IK stabilization helper (bridge build currently using AdvIK reflection route).
 - `MainGameLogRelay` - Shared logging relay used by the plugin set.
+- `MainGameAdvIkBridge` - Optional AdvIK reflection bridge source.
 
 ## Build
 
@@ -22,6 +23,7 @@ dotnet build .\MainGameTransformGizmo\MainGameTransformGizmo.csproj -c Release
 dotnet build .\MainGameUiInputCapture\MainGameUiInputCapture.csproj -c Release
 dotnet build .\MainGirlShoulderIkStabilizer\MainGirlShoulderIkStabilizer.csproj -c Release
 dotnet build .\MainGameLogRelay\MainGameLogRelay.csproj -c Release
+dotnet build .\MainGameAdvIkBridge\MainGameAdvIkBridge.csproj -c Release
 ```
 
 ## Release (DLL)

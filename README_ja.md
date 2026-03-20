@@ -9,8 +9,9 @@ English version: [README.md](README.md)
 - `MainGirlHipHijack` - 女キャラ BodyIK 制御、ギズモ編集、ポーズプリセット自動適用
 - `MainGameTransformGizmo` - IK/オブジェクト操作用のランタイム変形ギズモ
 - `MainGameUiInputCapture` - ドラッグ/編集時の UI 入力キャプチャ統合制御
-- `MainGirlShoulderIkStabilizer` - 肩 IK の安定化補助
+- `MainGirlShoulderIkStabilizer` - 肩IK安定化補助（現在は AdvIK 反射ブリッジ版）
 - `MainGameLogRelay` - プラグイン群で共通利用するログ中継
+- `MainGameAdvIkBridge` - AdvIK 反射連携用の任意ソース
 
 ## ビルド
 
@@ -22,6 +23,7 @@ dotnet build .\MainGameTransformGizmo\MainGameTransformGizmo.csproj -c Release
 dotnet build .\MainGameUiInputCapture\MainGameUiInputCapture.csproj -c Release
 dotnet build .\MainGirlShoulderIkStabilizer\MainGirlShoulderIkStabilizer.csproj -c Release
 dotnet build .\MainGameLogRelay\MainGameLogRelay.csproj -c Release
+dotnet build .\MainGameAdvIkBridge\MainGameAdvIkBridge.csproj -c Release
 ```
 
 ## リリース（DLL）

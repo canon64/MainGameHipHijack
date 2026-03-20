@@ -1,60 +1,22 @@
-﻿# MainGirlShoulderIkStabilizer
+﻿# MainGirlShoulderIkStabilizer (Bridge Build)
 
-A female shoulder stabilization plugin that post-processes FinalIK full-body solving in H-scenes.
+This build is a bridge plugin that applies AdvIK shoulder-related settings in MainGame.
 
-It attaches a shoulder rotator to female `FullBodyBipedIK` and adjusts shoulder rotation according to arm state, with safety clamps and per-side tuning.
-
-## Runtime Targets
-
-- `KoikatsuSunshine`
-- `KoikatsuSunshine_VR`
-
-## Hard Dependency
-
-- `MainGameLogRelay`
-
-## Core Behavior
-
-- Resolves current H-scene main female character runtime references
-- Finds female `animBody` and `FullBodyBipedIK`
-- Attaches `ShoulderRotator` to solver host object
-- Hooks solver post-update and applies shoulder correction per arm
-- Supports:
-  - independent left/right tuning
-  - reverse-on-lowered-arm behavior
-  - lowered/raised arm response scaling
-  - max delta-angle and solver blend safety limits
-
-## Settings File
-
-- `ShoulderIkStabilizerSettings.json`
-
-Settings are normalized/clamped and polled for hot-reload every ~2 seconds.
-
-## Logging
-
-ConfigManager keys include:
-
-- `General/VerboseLog`
-- `Logging/EnableLogs`
-
-When relay logging is enabled, logs are routed through `MainGameLogRelay` with owner:
-
-- `com.kks.main.girlshoulderikstabilizer`
-
-## Files In This Folder
+## Files
 
 - `MainGirlShoulderIkStabilizer.dll`
-- `ShoulderIkStabilizerSettings.json`
+- Optional source shoulder settings: `ShoulderIkStabilizerSettings.json`
 
-## Build (Source)
+## Notes
 
-- Target framework: `net472`
-- Build command: `dotnet build MainGirlShoulderIkStabilizer.csproj -c Release`
-- Output DLL: `bin/Release/net472/MainGirlShoulderIkStabilizer.dll`
+- Internal plugin ID is `com.kks.main.advikbridge` (MainGameAdvIkBridge).
+- Configure from BepInEx ConfigurationManager.
+- Numeric fields are exposed as sliders.
+- Popups include English + Japanese descriptions.
+- If `UseShoulderStabilizerSettings` is enabled, values are loaded from the shoulder settings JSON path.
 
-## Plugin Info
+## Requirements
 
-- GUID: `com.kks.main.girlshoulderikstabilizer`
-- Name: `MainGirlShoulderIkStabilizer`
-- Version: `1.0.0`
+- KoikatsuSunshine
+- BepInEx 5.x
+- AdvIK plugin installed (assembly must be loaded for bridge apply)
