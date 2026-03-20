@@ -26,3 +26,6 @@ KNOWN_ISSUES.md
 
 # Runtime side artifacts (do not commit from local game folder snapshots)
 BepInEx/
+
+# JSON
+*.json
