@@ -1,0 +1,1199 @@
+using System;
+using MainGameTransformGizmo;
+using RootMotion.FinalIK;
+using UnityEngine;
+
+namespace MainGirlHipHijack
+{
+    public sealed partial class Plugin
+    {
+        private static bool IsRotationDrivenEffector(int idx)
+        {
+            return idx == BIK_LH || idx == BIK_RH || idx == BIK_LF || idx == BIK_RF || idx == BIK_BODY;
+        }
+
+        private void SetBodyIK(int idx, bool on, bool saveSettings = true, string reason = "unknown")
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return;
+
+            bool prev = _bikWant[idx];
+            bool runtimeAligned = on ? _bikEff[idx].Running : !_bikEff[idx].Running;
+            if (prev == on && _settings.Enabled[idx] == on && runtimeAligned)
+                return;
+
+            if (_settings.DetailLogEnabled)
+                LogInfo("setBodyIK reason=" + reason + " idx=" + idx + " " + prev + "->" + on);
+
+            if (on)
+            {
+                _abandonedByPostureChange = false;
+                _pendingAbandonByPostureChange = false;
+                _pendingAbandonTrigger = null;
+                _pendingAbandonRequestTime = 0f;
+            }
+
+            _bikWant[idx] = on;
+            _settings.Enabled[idx] = on;
+            if (on)
+                DoEnableBodyIK(idx);
+            else
+                DoDisableBodyIK(idx, preserveProxy: true);
+
+            if (saveSettings)
+                SaveSettings();
+
+            LogStateSnapshot("setBodyIK:" + reason);
+        }
+
+        private void SetAllBodyIK(bool on, bool saveSettings = true, string reason = null)
+        {
+            string applyReason = reason ?? (on ? "ui-all-on" : "ui-all-off");
+            for (int i = 0; i < BIK_TOTAL; i++)
+                SetBodyIK(i, on, saveSettings: false, reason: applyReason);
+
+            if (saveSettings)
+                SaveSettings();
+
+            LogStateSnapshot(on ? "setAll-on" : "setAll-off");
+        }
+
+        private void CompleteResetToAnimationPose()
+        {
+            bool hadActive = false;
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikWant[i] || _bikEff[i].Running)
+                {
+                    hadActive = true;
+                    break;
+                }
+            }
+
+            StopPoseTransitionIfRunning();
+            for (int i = 0; i < BIK_TOTAL; i++)
+                ResetBodyIKPartToAnimationPose(i, stopPoseTransition: false, logSnapshot: false, applyImmediate: false);
+
+            _abandonedByPostureChange = false;
+
+            // Clear leaked bindings immediately so animation pose is restored in the same frame.
+            ForceOffBindingsForDisabledBodyIK();
+            RecomputeGizmoDraggingState();
+
+            LogInfo("complete reset to animation pose bodyIKActiveBefore=" + hadActive + " keepSavedSettings=true");
+            LogStateSnapshot("complete-reset", force: true);
+        }
+
+        private void ResetBodyIKPartToAnimationPose(
+            int idx,
+            bool stopPoseTransition = true,
+            bool logSnapshot = true,
+            bool applyImmediate = true)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return;
+
+            if (stopPoseTransition)
+                StopPoseTransitionIfRunning();
+
+            bool wasWanted = _bikWant[idx];
+            bool wasRunning = _bikEff[idx].Running;
+
+            // Runtimeのみリセットし、保存設定(_settings.Enabled)は保持する。
+            _bikWant[idx] = false;
+
+            if (wasRunning)
+                DoDisableBodyIK(idx, silent: true, deferDragRecompute: true);
+
+            if (_sliderDragging && _sliderDraggingIndex == idx)
+                SetSliderDragging(false, idx, "part-reset");
+
+            if (applyImmediate)
+            {
+                ForceOffBindingsForDisabledBodyIK();
+                RecomputeGizmoDraggingState();
+            }
+
+            if (wasWanted || wasRunning)
+                LogInfo("part reset to animation pose idx=" + idx + " label=" + BIK_Labels[idx] + " keepSavedSettings=true");
+
+            if (logSnapshot)
+                LogStateSnapshot("part-reset:" + BIK_Labels[idx], force: true);
+        }
+
+        private bool GetGizmoVisible(int idx)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return true;
+
+            if (_settings == null || _settings.GizmoVisible == null || _settings.GizmoVisible.Length != BIK_TOTAL)
+                return true;
+
+            return _settings.GizmoVisible[idx];
+        }
+
+        private bool IsGizmoVisible(int idx)
+        {
+            return _settings != null && _settings.ShowGizmo && GetGizmoVisible(idx);
+        }
+
+        private void SetGizmoVisible(int idx, bool on, bool saveSettings = true)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return;
+            if (_settings == null || _settings.GizmoVisible == null || _settings.GizmoVisible.Length != BIK_TOTAL)
+                return;
+            if (_settings.GizmoVisible[idx] == on)
+                return;
+
+            _settings.GizmoVisible[idx] = on;
+            if (_bikEff[idx].Running && _bikEff[idx].Gizmo != null)
+                _bikEff[idx].Gizmo.SetVisible(IsGizmoVisible(idx));
+
+            if (saveSettings)
+                SaveSettings();
+        }
+
+        private void SetAllGizmoVisible(bool on)
+        {
+            if (_settings == null || _settings.GizmoVisible == null || _settings.GizmoVisible.Length != BIK_TOTAL)
+                return;
+
+            bool changed = false;
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_settings.GizmoVisible[i] == on)
+                    continue;
+                _settings.GizmoVisible[i] = on;
+                changed = true;
+            }
+
+            if (!changed)
+                return;
+
+            ApplyGizmoVisibilityToRunning();
+            SaveSettings();
+        }
+
+        private void ApplyGizmoVisibilityToRunning()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running || _bikEff[i].Gizmo == null)
+                    continue;
+                _bikEff[i].Gizmo.SetVisible(IsGizmoVisible(i));
+            }
+
+            UpdateMaleHeadTargetGizmoVisibility();
+            UpdateAllMaleControlGizmoVisibility();
+        }
+
+        private float GetGizmoSizeMultiplier()
+        {
+            if (_settings == null)
+                return 0.2f;
+
+            return Mathf.Clamp(
+                _settings.GizmoSizeMultiplier,
+                TransformGizmo.MinSizeMultiplier,
+                TransformGizmo.MaxSizeMultiplier);
+        }
+
+        private void SetGizmoSizeMultiplier(float value)
+        {
+            if (_settings == null)
+                return;
+
+            float clamped = Mathf.Clamp(value, TransformGizmo.MinSizeMultiplier, TransformGizmo.MaxSizeMultiplier);
+            if (Mathf.Abs(_settings.GizmoSizeMultiplier - clamped) <= 0.0001f)
+                return;
+
+            _settings.GizmoSizeMultiplier = clamped;
+            ApplyGizmoSizeToRunning();
+            SaveSettings();
+        }
+
+        private void ApplyGizmoSizeToRunning()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running || _bikEff[i].Gizmo == null)
+                    continue;
+                ApplyConfiguredGizmoSize(_bikEff[i].Gizmo);
+            }
+
+            if (_runtime.MaleHeadTargetGizmo != null)
+                ApplyConfiguredGizmoSize(_runtime.MaleHeadTargetGizmo);
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                MaleControlState state = GetMaleControlState(i);
+                if (state == null || state.Gizmo == null)
+                    continue;
+                ApplyConfiguredGizmoSize(state.Gizmo);
+            }
+        }
+
+        private void ApplyConfiguredGizmoSize(TransformGizmo gizmo)
+        {
+            if (gizmo == null)
+                return;
+
+            TransformGizmoApi.SetSizeMultiplier(gizmo, GetGizmoSizeMultiplier());
+        }
+
+        private float GetBodyIKWeight(int idx)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return 1f;
+            return _bikWeight[idx];
+        }
+
+        private void SetBodyIKWeight(int idx, float weight, bool saveSettings = true)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return;
+
+            float clamped = Mathf.Clamp01(weight);
+            if (Mathf.Approximately(_bikWeight[idx], clamped))
+                return;
+
+            _bikWeight[idx] = clamped;
+            _settings.Weights[idx] = clamped;
+            ApplyBodyIKWeight(idx);
+            if (saveSettings)
+                SaveSettings();
+        }
+
+        private void DoEnableBodyIK(int idx)
+        {
+            if (_bikEff[idx].Running)
+                return;
+            if (_runtime.Fbbik == null)
+                return;
+
+            bool reuseProxy = _bikEff[idx].ProxyGo != null;
+
+            if (_bikEff[idx].IsBendGoal)
+            {
+                IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                if (bc == null)
+                    return;
+                CaptureOriginalBendGoalIfNeeded(idx, bc);
+                if (!reuseProxy)
+                {
+                    float radius = 0.15f;
+                    if (bc.bone1 != null && bc.bone2 != null)
+                        radius = Vector3.Distance(bc.bone1.position, bc.bone2.position);
+                    _bikEff[idx].BendGoalRadius = Mathf.Clamp(radius, 0.05f, 0.6f);
+                }
+            }
+            else
+            {
+                IKEffector eff = BIK_GetEffector(idx);
+                if (eff == null)
+                    return;
+                CaptureOriginalEffectorTargetIfNeeded(idx, eff);
+                if (!reuseProxy)
+                    _bikEff[idx].BendGoalRadius = 0f;
+            }
+
+            if (!reuseProxy)
+            {
+                Vector3 initPos;
+                Quaternion initRot;
+                if (_bikEff[idx].IsBendGoal)
+                {
+                    IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                    initPos = bc.bone2 != null ? bc.bone2.position : Vector3.zero;
+                    initRot = bc.bone2 != null ? bc.bone2.rotation : Quaternion.identity;
+                }
+                else
+                {
+                    IKEffector eff = BIK_GetEffector(idx);
+                    initPos = eff.bone != null ? eff.bone.position : Vector3.zero;
+                    initRot = eff.bone != null ? eff.bone.rotation : Quaternion.identity;
+                }
+
+                GameObject go = new GameObject("__BodyIkGizmoProxy_" + idx);
+                go.hideFlags = HideFlags.HideAndDontSave;
+                go.transform.SetPositionAndRotation(initPos, initRot);
+                _bikEff[idx].ProxyGo = go;
+                _bikEff[idx].Proxy = go.transform;
+                _bikEff[idx].GizmoDragging = false;
+                _bikEff[idx].GizmoDragHandler = null;
+                _bikEff[idx].FollowBone = null;
+                _bikEff[idx].FollowBonePositionOffset = Vector3.zero;
+                _bikEff[idx].FollowBoneRotationOffset = Quaternion.identity;
+
+                // VRスフィアマーカー生成（デフォルト非表示、VRGrabMode ONで表示）
+                var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                Destroy(sphere.GetComponent<Collider>());
+                sphere.name = "__VRMarker_" + idx;
+                sphere.hideFlags = HideFlags.HideAndDontSave;
+                sphere.transform.SetParent(go.transform, false);
+                sphere.transform.localPosition = Vector3.zero;
+                sphere.transform.localScale    = Vector3.one * 0.1f;
+                _bikEff[idx].VRMarkerGo   = sphere;
+                _bikEff[idx].VRMarkerRend = sphere.GetComponent<Renderer>();
+                if (_bikEff[idx].VRMarkerRend != null)
+                {
+                    var mat = new Material(Shader.Find("Unlit/Color") ?? Shader.Find("Standard"));
+                    mat.color = new Color(0f, 1f, 1f);
+                    mat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+                    _bikEff[idx].VRMarkerRend.sharedMaterial = mat;
+                }
+                sphere.SetActive(false);
+            }
+
+            // IKエフェクターにプロキシを再アタッチ
+            if (_bikEff[idx].IsBendGoal)
+            {
+                IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                if (bc == null)
+                {
+                    if (!reuseProxy) Destroy(_bikEff[idx].ProxyGo);
+                    _bikEff[idx].ProxyGo = null;
+                    _bikEff[idx].Proxy = null;
+                    return;
+                }
+                bc.bendGoal = _bikEff[idx].Proxy;
+                bc.weight = GetBodyIKWeight(idx);
+            }
+            else
+            {
+                IKEffector eff = BIK_GetEffector(idx);
+                if (eff == null)
+                {
+                    if (!reuseProxy) Destroy(_bikEff[idx].ProxyGo);
+                    _bikEff[idx].ProxyGo = null;
+                    _bikEff[idx].Proxy = null;
+                    return;
+                }
+                eff.target = _bikEff[idx].Proxy;
+                eff.positionWeight = GetBodyIKWeight(idx);
+                if (IsRotationDrivenEffector(idx))
+                    eff.rotationWeight = GetBodyIKWeight(idx);
+            }
+
+            _runtime.Fbbik.enabled = true;
+            _bikEff[idx].Running = true;
+            _bikEff[idx].GizmoDragging = false;
+
+            // VRGrabMode中であれば即座にマーカーを表示（ONにした後でIKを有効化した場合も対応）
+            if (_vrGrabMode && _bikEff[idx].VRMarkerGo != null)
+            {
+                _bikEff[idx].VRMarkerGo.SetActive(true);
+                if (_bikEff[idx].VRMarkerRend != null)
+                    _bikEff[idx].VRMarkerRend.material.color = new Color(0f, 1f, 1f);
+            }
+
+            // ギズモのアタッチ（再利用時は再登録のみ）
+            if (_bikEff[idx].Gizmo == null)
+            {
+                _bikEff[idx].Gizmo = TransformGizmoApi.Attach(_bikEff[idx].ProxyGo);
+                if (_bikEff[idx].Gizmo != null)
+                {
+                    ApplyConfiguredGizmoSize(_bikEff[idx].Gizmo);
+                    int capturedIdx = idx;
+                    _bikEff[idx].GizmoDragHandler = dragging => OnBodyIkGizmoDragStateChanged(capturedIdx, dragging);
+                    _bikEff[idx].Gizmo.DragStateChanged += _bikEff[idx].GizmoDragHandler;
+                }
+            }
+            else if (_bikEff[idx].GizmoDragHandler != null)
+            {
+                _bikEff[idx].Gizmo.DragStateChanged += _bikEff[idx].GizmoDragHandler;
+            }
+
+            if (_bikEff[idx].Gizmo != null)
+                _bikEff[idx].Gizmo.SetVisible(IsGizmoVisible(idx));
+
+            LogInfo("bodyIK enabled: " + BIK_Labels[idx] + (reuseProxy ? " (proxy reused)" : ""));
+        }
+
+        // preserveProxy=true: IKウェイトを0にするだけで座標・ギズモは保持（チェックボックスOFF用）
+        // preserveProxy=false: プロキシとギズモを完全破棄（「戻す」ボタン・体位変更用）
+        private void DoDisableBodyIK(int idx, bool silent = false, bool deferDragRecompute = false, bool preserveProxy = false)
+        {
+            if (!_bikEff[idx].Running)
+                return;
+
+            if (!silent && _settings != null && _settings.DetailLogEnabled)
+                LogInfo("bodyIK disable req: " + BIK_Labels[idx] + " state=" + BuildSolverBindingStateText(idx));
+
+            if (_bikEff[idx].Gizmo != null && _bikEff[idx].GizmoDragHandler != null)
+                _bikEff[idx].Gizmo.DragStateChanged -= _bikEff[idx].GizmoDragHandler;
+
+            if (_bikEff[idx].GizmoDragging)
+            {
+                _bikEff[idx].GizmoDragging = false;
+                if (!deferDragRecompute)
+                    RecomputeGizmoDraggingState();
+            }
+
+            if (_runtime.Fbbik != null)
+            {
+                if (_bikEff[idx].IsBendGoal)
+                {
+                    IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                    if (bc != null)
+                    {
+                        Transform restore = GetRestoreBendGoalTarget(idx, bc);
+                        if (!ReferenceEquals(bc.bendGoal, restore))
+                            bc.bendGoal = restore;
+                        bc.weight = 0f;
+                    }
+                }
+                else
+                {
+                    IKEffector eff = BIK_GetEffector(idx);
+                    if (eff != null)
+                    {
+                        eff.positionWeight = 0f;
+                        if (IsRotationDrivenEffector(idx))
+                            eff.rotationWeight = 0f;
+                        Transform restore = GetRestoreEffectorTarget(idx, eff);
+                        if (!ReferenceEquals(eff.target, restore))
+                            eff.target = restore;
+                    }
+                }
+            }
+
+            if (preserveProxy)
+            {
+                // 座標・ギズモを保持：ギズモを非表示にするだけ
+                if (_bikEff[idx].Gizmo != null)
+                    _bikEff[idx].Gizmo.SetVisible(false);
+                _bikEff[idx].GizmoDragging = false;
+                // GizmoDragHandlerは保持して再ONで再登録できるようにする
+                if (_bikEff[idx].VRMarkerGo != null)
+                    _bikEff[idx].VRMarkerGo.SetActive(false);
+            }
+            else
+            {
+                // 完全破棄
+                DestroyFollowVisuals(idx);
+                _bikEff[idx].FollowBone = null;
+                _bikEff[idx].FollowBonePositionOffset = Vector3.zero;
+                _bikEff[idx].FollowBoneRotationOffset = Quaternion.identity;
+
+                // VRMarkerGoはProxyGoの子なのでProxyGo破棄で自動消滅するが参照はクリア
+                _bikEff[idx].VRMarkerGo   = null;
+                _bikEff[idx].VRMarkerRend = null;
+
+                if (_bikEff[idx].ProxyGo != null)
+                    Destroy(_bikEff[idx].ProxyGo);
+
+                _bikEff[idx].ProxyGo = null;
+                _bikEff[idx].Proxy = null;
+                _bikEff[idx].Gizmo = null;
+                _bikEff[idx].GizmoDragHandler = null;
+                _bikEff[idx].GizmoDragging = false;
+            }
+
+            _bikEff[idx].Running = false;
+            if (!silent)
+            {
+                LogInfo("bodyIK disabled: " + BIK_Labels[idx] + (preserveProxy ? " (proxy preserved)" : ""));
+                if (_settings != null && _settings.DetailLogEnabled)
+                    LogInfo("bodyIK disabled post: " + BIK_Labels[idx] + " state=" + BuildSolverBindingStateText(idx));
+            }
+        }
+
+        private void DisableAllBodyIK(bool silent = false)
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+                DoDisableBodyIK(i, silent, deferDragRecompute: true);
+            RecomputeGizmoDraggingState();
+        }
+
+        private void RequestAbandonAllBodyIKByPostureChange(string trigger)
+        {
+            if (string.IsNullOrEmpty(trigger))
+                trigger = "unknown";
+
+            if (_pendingAbandonByPostureChange)
+            {
+                _pendingAbandonTrigger = trigger;
+                return;
+            }
+
+            _pendingAbandonByPostureChange = true;
+            _pendingAbandonTrigger = trigger;
+            _pendingAbandonRequestTime = Time.unscaledTime;
+            _abandonedByPostureChange = true;
+
+            if (_settings != null && _settings.DetailLogEnabled)
+                LogInfo("abandon request bodyIK trigger=" + trigger);
+        }
+
+        private void TryFlushPendingAbandonByPostureChange(string flushSource, bool force)
+        {
+            if (!_pendingAbandonByPostureChange)
+                return;
+
+            if (!force)
+            {
+                float elapsed = Time.unscaledTime - _pendingAbandonRequestTime;
+                if (elapsed < PendingAbandonFallbackDelaySeconds)
+                    return;
+            }
+
+            string trigger = string.IsNullOrEmpty(_pendingAbandonTrigger) ? "unknown" : _pendingAbandonTrigger;
+            _pendingAbandonByPostureChange = false;
+            _pendingAbandonTrigger = null;
+            _pendingAbandonRequestTime = 0f;
+
+            DisableAllBodyIK(silent: true);
+
+            bool changed = false;
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikWant[i])
+                    changed = true;
+                _bikWant[i] = false;
+
+                if (_settings.Enabled[i])
+                    changed = true;
+                _settings.Enabled[i] = false;
+
+                _nextOffLeakWarnTime[i] = 0f;
+            }
+
+            _abandonedByPostureChange = true;
+            if (changed)
+                SaveSettings();
+            LogInfo("abandon all bodyIK trigger=" + trigger + " flush=" + flushSource);
+            LogStateSnapshot("abandon-posture", force: true);
+        }
+
+        private bool HasAnyBodyIKActiveState()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikWant[i])
+                    return true;
+                if (_bikEff[i] != null && _bikEff[i].Running)
+                    return true;
+                if (_settings != null && _settings.Enabled != null && i < _settings.Enabled.Length && _settings.Enabled[i])
+                    return true;
+            }
+            return false;
+        }
+
+        private struct BodyIkDiagSnapshot
+        {
+            public int Index;
+            public string Label;
+            public bool Want;
+            public bool Enabled;
+            public bool Running;
+            public bool GizmoDragging;
+            public bool IsBend;
+            public float ConfigWeight;
+            public float SolverPosWeight;
+            public float SolverRotWeight;
+            public Transform Binding;
+            public bool BindingIsOwnedProxy;
+            public Transform Bone;
+            public Transform Proxy;
+            public Vector3 BonePos;
+            public Vector3 ProxyPos;
+            public float BoneToProxyDistance;
+        }
+
+        private bool ShouldLogBodyIkDiagnostics(out int idx)
+        {
+            idx = -1;
+            if (_settings == null || !_settings.BodyIkDiagnosticLog)
+            {
+                _lastBodyIkDiagHasPost = false;
+                return false;
+            }
+
+            float interval = Mathf.Clamp(_settings.BodyIkDiagnosticLogInterval, 0.05f, 2f);
+            if (Time.unscaledTime < _nextBodyIkDiagLogTime)
+                return false;
+
+            _nextBodyIkDiagLogTime = Time.unscaledTime + interval;
+            idx = ResolveBodyIkDiagnosticIndex();
+            return idx >= 0;
+        }
+
+        private int ResolveBodyIkDiagnosticIndex()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                BIKEffectorState state = _bikEff[i];
+                if (state != null && state.Running && state.GizmoDragging)
+                    return i;
+            }
+
+            if (_bikEff[BIK_BODY] != null && _bikEff[BIK_BODY].Running)
+                return BIK_BODY;
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                BIKEffectorState state = _bikEff[i];
+                if (state != null && state.Running)
+                    return i;
+            }
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikWant[i])
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private bool TryCaptureBodyIkDiagSnapshot(int idx, out BodyIkDiagSnapshot snap)
+        {
+            snap = default(BodyIkDiagSnapshot);
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return false;
+
+            BIKEffectorState state = _bikEff[idx];
+            snap.Index = idx;
+            snap.Label = BIK_Labels[idx];
+            snap.Want = _bikWant[idx];
+            snap.Enabled = _settings != null
+                && _settings.Enabled != null
+                && idx < _settings.Enabled.Length
+                && _settings.Enabled[idx];
+            snap.Running = state != null && state.Running;
+            snap.GizmoDragging = state != null && state.GizmoDragging;
+            snap.ConfigWeight = GetBodyIKWeight(idx);
+            snap.IsBend = idx >= BIK_BEND_START && idx != BIK_BODY;
+
+            if (state != null)
+            {
+                snap.Proxy = state.Proxy;
+                if (snap.Proxy != null)
+                    snap.ProxyPos = snap.Proxy.position;
+            }
+
+            if (snap.IsBend)
+            {
+                IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                if (bc != null)
+                {
+                    snap.Binding = bc.bendGoal;
+                    snap.SolverPosWeight = bc.weight;
+                    snap.SolverRotWeight = -1f;
+                    snap.Bone = bc.bone2;
+                }
+            }
+            else
+            {
+                IKEffector eff = BIK_GetEffector(idx);
+                if (eff != null)
+                {
+                    snap.Binding = eff.target;
+                    snap.SolverPosWeight = eff.positionWeight;
+                    snap.SolverRotWeight = IsRotationDrivenEffector(idx) ? eff.rotationWeight : -1f;
+                    snap.Bone = eff.bone;
+                }
+            }
+
+            snap.BindingIsOwnedProxy = IsOwnedProxyTransform(snap.Binding);
+            if (snap.Bone != null)
+                snap.BonePos = snap.Bone.position;
+            snap.BoneToProxyDistance = (snap.Bone != null && snap.Proxy != null)
+                ? Vector3.Distance(snap.Bone.position, snap.Proxy.position)
+                : -1f;
+            return true;
+        }
+
+        private void LogBodyIkDiagnostics(BodyIkDiagSnapshot before, BodyIkDiagSnapshot after, bool skippedByAbandon)
+        {
+            bool hasCarry = _lastBodyIkDiagHasPost
+                && _lastBodyIkDiagIndex == before.Index
+                && _lastBodyIkDiagFrame == Time.frameCount - 1;
+            float carryBone = hasCarry ? Vector3.Distance(_lastBodyIkDiagPostBonePos, before.BonePos) : -1f;
+            float carryProxy = hasCarry ? Vector3.Distance(_lastBodyIkDiagPostProxyPos, before.ProxyPos) : -1f;
+
+            string verdict = BuildBodyIkDiagVerdict(before, after, skippedByAbandon, hasCarry, carryBone, carryProxy);
+            string bindingBefore = before.Binding != null ? before.Binding.name : "null";
+            string bindingAfter = after.Binding != null ? after.Binding.name : "null";
+
+            string msg = "[BodyIK-DIAG] frame=" + Time.frameCount
+                + " idx=" + before.Index + "(" + before.Label + ")"
+                + " verdict=" + verdict
+                + " abandoned=" + _abandonedByPostureChange
+                + " pendingAbandon=" + _pendingAbandonByPostureChange
+                + " want=" + before.Want
+                + " enabled=" + before.Enabled
+                + " running=" + before.Running
+                + " drag=" + before.GizmoDragging
+                + " cfgW=" + before.ConfigWeight.ToString("F3")
+                + " solverW(before->after)=" + before.SolverPosWeight.ToString("F3") + "->" + after.SolverPosWeight.ToString("F3")
+                + " bind(before->after)=" + bindingBefore + "->" + bindingAfter
+                + " bindOwned(before->after)=" + before.BindingIsOwnedProxy + "->" + after.BindingIsOwnedProxy
+                + " bone(before->after)=" + Vec3(before.BonePos) + "->" + Vec3(after.BonePos)
+                + " proxy(before->after)=" + Vec3(before.ProxyPos) + "->" + Vec3(after.ProxyPos)
+                + " dist(before->after)=" + before.BoneToProxyDistance.ToString("F4") + "->" + after.BoneToProxyDistance.ToString("F4")
+                + " carry(bone/proxy)=" + carryBone.ToString("F4") + "/" + carryProxy.ToString("F4");
+            LogInfo(msg);
+
+            if (after.Bone != null && after.Proxy != null)
+            {
+                _lastBodyIkDiagHasPost = true;
+                _lastBodyIkDiagFrame = Time.frameCount;
+                _lastBodyIkDiagIndex = after.Index;
+                _lastBodyIkDiagPostBonePos = after.BonePos;
+                _lastBodyIkDiagPostProxyPos = after.ProxyPos;
+            }
+            else
+            {
+                _lastBodyIkDiagHasPost = false;
+            }
+        }
+
+        private static string BuildBodyIkDiagVerdict(
+            BodyIkDiagSnapshot before,
+            BodyIkDiagSnapshot after,
+            bool skippedByAbandon,
+            bool hasCarry,
+            float carryBone,
+            float carryProxy)
+        {
+            if (skippedByAbandon)
+                return "skip:abandoned";
+            if (!before.Want && !before.Running)
+                return "skip:inactive";
+            if (!before.Enabled)
+                return "skip:enabled-off";
+            if (before.ConfigWeight <= 0.0001f || after.SolverPosWeight <= 0.0001f)
+                return "skip:weight-zero";
+            if (!after.BindingIsOwnedProxy)
+                return "warn:binding-not-proxy";
+            if (hasCarry && carryProxy <= 0.001f && carryBone >= 0.01f)
+                return "suspect:overwritten-between-frames";
+            return "apply:path-active";
+        }
+
+        private void ResetBodyIkDiagnosticsState()
+        {
+            _nextBodyIkDiagLogTime = 0f;
+            _lastBodyIkDiagFrame = -1;
+            _lastBodyIkDiagIndex = -1;
+            _lastBodyIkDiagPostBonePos = Vector3.zero;
+            _lastBodyIkDiagPostProxyPos = Vector3.zero;
+            _lastBodyIkDiagHasPost = false;
+        }
+
+        private void OnAfterHSceneLateUpdateBodyIK()
+        {
+            if (_runtime.Fbbik == null)
+                return;
+
+            int diagIdx;
+            bool doDiag = ShouldLogBodyIkDiagnostics(out diagIdx);
+            BodyIkDiagSnapshot diagBefore = default(BodyIkDiagSnapshot);
+            if (doDiag && !TryCaptureBodyIkDiagSnapshot(diagIdx, out diagBefore))
+                doDiag = false;
+
+            if (_abandonedByPostureChange)
+            {
+                if (doDiag)
+                    LogBodyIkDiagnostics(diagBefore, diagBefore, skippedByAbandon: true);
+                return;
+            }
+
+            UpdateFollowBones();
+            UpdateFollowBoneVisuals();
+            EnsureOnBindingsForRunningBodyIK();
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running)
+                    continue;
+
+                ApplyBodyIKWeight(i);
+                if (_bikEff[i].IsBendGoal && _bikEff[i].Proxy != null)
+                    SetBendGoalProxyByDirection(i, _bikEff[i].Proxy.position);
+                if (_bikEff[i].Gizmo != null)
+                    _bikEff[i].Gizmo.SetVisible(IsGizmoVisible(i));
+            }
+
+            ForceOffBindingsForDisabledBodyIK();
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikWant[i] || _bikEff[i].Running)
+                    continue;
+                WarnIfOffBindingStillActive(i);
+            }
+
+            if (doDiag)
+            {
+                BodyIkDiagSnapshot diagAfter;
+                if (TryCaptureBodyIkDiagSnapshot(diagIdx, out diagAfter))
+                    LogBodyIkDiagnostics(diagBefore, diagAfter, skippedByAbandon: false);
+            }
+        }
+
+        private void ApplyBodyIKWeight(int idx)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return;
+            if (_runtime.Fbbik == null || !_bikEff[idx].Running)
+                return;
+
+            float w = GetBodyIKWeight(idx);
+            if (idx < BIK_BEND_START || idx == BIK_BODY)
+            {
+                IKEffector eff = BIK_GetEffector(idx);
+                if (eff == null)
+                    return;
+                eff.positionWeight = w;
+                if (IsRotationDrivenEffector(idx))
+                    eff.rotationWeight = w;
+            }
+            else
+            {
+                IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                if (bc != null)
+                    bc.weight = w;
+            }
+        }
+
+        private void SetBendGoalProxyByDirection(int idx, Vector3 desiredWorldPos)
+        {
+            if (idx < BIK_BEND_START || idx >= BIK_TOTAL)
+                return;
+            if (!_bikEff[idx].Running || _bikEff[idx].Proxy == null)
+                return;
+
+            _bikEff[idx].Proxy.position = desiredWorldPos;
+        }
+
+        private void EnsureOnBindingsForRunningBodyIK()
+        {
+            if (_runtime.Fbbik == null)
+                return;
+
+            bool hasRunning = false;
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikEff[i].Running)
+                {
+                    hasRunning = true;
+                    break;
+                }
+            }
+
+            if (hasRunning && !_runtime.Fbbik.enabled)
+            {
+                _runtime.Fbbik.enabled = true;
+                float now = Time.unscaledTime;
+                if (_settings != null && _settings.DetailLogEnabled && now >= _nextFbbikReenableWarnTime)
+                {
+                    _nextFbbikReenableWarnTime = now + 0.5f;
+                    LogWarn("fbbik was disabled while bodyIK running -> forced enabled");
+                }
+            }
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running)
+                    continue;
+                if (_bikEff[i].Proxy == null)
+                    continue;
+
+                if (i >= BIK_BEND_START && i != BIK_BODY)
+                {
+                    IKConstraintBend bc = BIK_GetBendConstraint(i);
+                    if (bc == null || ReferenceEquals(bc.bendGoal, _bikEff[i].Proxy))
+                        continue;
+
+                    bc.bendGoal = _bikEff[i].Proxy;
+                    float now = Time.unscaledTime;
+                    if (_settings != null && _settings.DetailLogEnabled && now >= _nextOnRebindWarnTime[i])
+                    {
+                        _nextOnRebindWarnTime[i] = now + 0.5f;
+                        LogWarn("rebind bendGoal idx=" + i + " -> proxy restored");
+                    }
+                }
+                else
+                {
+                    IKEffector eff = BIK_GetEffector(i);
+                    if (eff == null || ReferenceEquals(eff.target, _bikEff[i].Proxy))
+                        continue;
+
+                    eff.target = _bikEff[i].Proxy;
+                    float now = Time.unscaledTime;
+                    if (_settings != null && _settings.DetailLogEnabled && now >= _nextOnRebindWarnTime[i])
+                    {
+                        _nextOnRebindWarnTime[i] = now + 0.5f;
+                        LogWarn("rebind effector target idx=" + i + " -> proxy restored");
+                    }
+                }
+            }
+        }
+
+        private IKEffector BIK_GetEffector(int idx)
+        {
+            if (_runtime.Fbbik == null)
+                return null;
+            if (idx == BIK_BODY)
+                return _runtime.Fbbik.solver.bodyEffector;
+            if (idx >= BIK_BEND_START)
+                return null;
+            switch (idx)
+            {
+                case BIK_LH: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.LeftHand);
+                case BIK_RH: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.RightHand);
+                case BIK_LF: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.LeftFoot);
+                case BIK_RF: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.RightFoot);
+                case BIK_LS: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.LeftShoulder);
+                case BIK_RS: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.RightShoulder);
+                case BIK_LT: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.LeftThigh);
+                case BIK_RT: return _runtime.Fbbik.solver.GetEffector(FullBodyBipedEffector.RightThigh);
+                default: return null;
+            }
+        }
+
+        private IKConstraintBend BIK_GetBendConstraint(int idx)
+        {
+            if (_runtime.Fbbik == null || idx < BIK_BEND_START)
+                return null;
+            return _runtime.Fbbik.solver.GetBendConstraint(_bikEff[idx].BendChain);
+        }
+
+        private static FullBodyBipedChain BIK_IndexToBendChain(int idx)
+        {
+            switch (idx)
+            {
+                case BIK_LE: return FullBodyBipedChain.LeftArm;
+                case BIK_RE: return FullBodyBipedChain.RightArm;
+                case BIK_LK: return FullBodyBipedChain.LeftLeg;
+                case BIK_RK: return FullBodyBipedChain.RightLeg;
+                default: return FullBodyBipedChain.LeftArm;
+            }
+        }
+
+        private void WarnIfOffBindingStillActive(int idx)
+        {
+            if (_runtime.Fbbik == null || idx < 0 || idx >= BIK_TOTAL)
+                return;
+            if (_settings == null || !_settings.DetailLogEnabled)
+                return;
+
+            bool active = false;
+            if (idx >= BIK_BEND_START && idx != BIK_BODY)
+            {
+                IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                if (bc != null)
+                    active = IsOwnedProxyTransform(bc.bendGoal);
+            }
+            else
+            {
+                IKEffector eff = BIK_GetEffector(idx);
+                if (eff != null)
+                    active = IsOwnedProxyTransform(eff.target);
+            }
+
+            if (!active)
+                return;
+
+            float now = Time.unscaledTime;
+            if (now < _nextOffLeakWarnTime[idx])
+                return;
+
+            _nextOffLeakWarnTime[idx] = now + 0.5f;
+            LogWarn("bodyIK owned binding leak: " + BIK_Labels[idx] + " state=" + BuildSolverBindingStateText(idx));
+        }
+
+        private string BuildSolverBindingStateText(int idx)
+        {
+            if (_runtime.Fbbik == null)
+                return "fbbik=null";
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return "idx=invalid";
+
+            if (idx >= BIK_BEND_START && idx != BIK_BODY)
+            {
+                IKConstraintBend bc = BIK_GetBendConstraint(idx);
+                if (bc == null)
+                    return "bend=null";
+                string bendGoalName = bc.bendGoal != null ? bc.bendGoal.name : "null";
+                return "bendGoal=" + bendGoalName + ", weight=" + bc.weight.ToString("F3");
+            }
+
+            IKEffector eff = BIK_GetEffector(idx);
+            if (eff == null)
+                return "eff=null";
+
+            string targetName = eff.target != null ? eff.target.name : "null";
+            string text = "target=" + targetName + ", posW=" + eff.positionWeight.ToString("F3");
+            if (IsRotationDrivenEffector(idx))
+                text += ", rotW=" + eff.rotationWeight.ToString("F3");
+            return text;
+        }
+
+        private void ForceOffBindingsForDisabledBodyIK()
+        {
+            if (_runtime.Fbbik == null)
+                return;
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (_bikWant[i] || _bikEff[i].Running)
+                    continue;
+
+                if (i >= BIK_BEND_START && i != BIK_BODY)
+                {
+                    IKConstraintBend bc = BIK_GetBendConstraint(i);
+                    if (bc == null)
+                        continue;
+
+                    bool owned = IsOwnedProxyTransform(bc.bendGoal);
+                    if (!owned)
+                        continue;
+
+                    if (bc.bendGoal != null)
+                        LogDebug("force-off bend idx=" + i + " before=" + BuildSolverBindingStateText(i));
+
+                    Transform restore = GetRestoreBendGoalTarget(i, bc);
+                    if (!ReferenceEquals(bc.bendGoal, restore))
+                        bc.bendGoal = restore;
+                    bc.weight = 0f;
+                }
+                else
+                {
+                    IKEffector eff = BIK_GetEffector(i);
+                    if (eff == null)
+                        continue;
+
+                    bool hasLeak = IsOwnedProxyTransform(eff.target);
+                    if (hasLeak)
+                        LogDebug("force-off eff idx=" + i + " before=" + BuildSolverBindingStateText(i));
+                    else
+                        continue;
+
+                    Transform restore = GetRestoreEffectorTarget(i, eff);
+                    if (!ReferenceEquals(eff.target, restore))
+                        eff.target = restore;
+                    eff.positionWeight = 0f;
+                    if (IsRotationDrivenEffector(i))
+                        eff.rotationWeight = 0f;
+                }
+            }
+        }
+
+        private void ResetCachedBodyIkBindings()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                _bikEff[i].HasOriginalEffectorTarget = false;
+                _bikEff[i].OriginalEffectorTarget = null;
+                _bikEff[i].HasOriginalBendGoal = false;
+                _bikEff[i].OriginalBendGoal = null;
+
+                if (_bikEff[i].FallbackEffectorTargetGo != null)
+                    Destroy(_bikEff[i].FallbackEffectorTargetGo);
+                if (_bikEff[i].FallbackBendGoalGo != null)
+                    Destroy(_bikEff[i].FallbackBendGoalGo);
+
+                _bikEff[i].FallbackEffectorTargetGo = null;
+                _bikEff[i].FallbackBendGoalGo = null;
+            }
+        }
+
+        private void CaptureOriginalEffectorTargetIfNeeded(int idx, IKEffector eff)
+        {
+            if (eff == null)
+                return;
+
+            if (_bikEff[idx].HasOriginalEffectorTarget && !IsOwnedPluginBindingTransform(_bikEff[idx].OriginalEffectorTarget))
+                return;
+
+            if (IsOwnedPluginBindingTransform(eff.target))
+                return;
+
+            _bikEff[idx].HasOriginalEffectorTarget = true;
+            _bikEff[idx].OriginalEffectorTarget = eff.target;
+        }
+
+        private void CaptureOriginalBendGoalIfNeeded(int idx, IKConstraintBend bend)
+        {
+            if (bend == null)
+                return;
+
+            if (_bikEff[idx].HasOriginalBendGoal && !IsOwnedPluginBindingTransform(_bikEff[idx].OriginalBendGoal))
+                return;
+
+            if (IsOwnedPluginBindingTransform(bend.bendGoal))
+                return;
+
+            _bikEff[idx].HasOriginalBendGoal = true;
+            _bikEff[idx].OriginalBendGoal = bend.bendGoal;
+        }
+
+        private Transform GetRestoreEffectorTarget(int idx, IKEffector eff)
+        {
+            Transform restore = _bikEff[idx].HasOriginalEffectorTarget ? _bikEff[idx].OriginalEffectorTarget : null;
+            if (IsOwnedPluginBindingTransform(restore))
+                restore = null;
+
+            if (restore == null && eff != null && !IsOwnedPluginBindingTransform(eff.target))
+                restore = eff.target;
+
+            if (restore == null)
+                restore = GetOrCreateFallbackBindingTransform(idx, isBendGoal: false, eff != null ? eff.bone : null);
+
+            return restore;
+        }
+
+        private Transform GetRestoreBendGoalTarget(int idx, IKConstraintBend bend)
+        {
+            Transform restore = _bikEff[idx].HasOriginalBendGoal ? _bikEff[idx].OriginalBendGoal : null;
+            if (IsOwnedPluginBindingTransform(restore))
+                restore = null;
+
+            if (restore == null && bend != null && !IsOwnedPluginBindingTransform(bend.bendGoal))
+                restore = bend.bendGoal;
+
+            if (restore == null)
+                restore = GetOrCreateFallbackBindingTransform(idx, isBendGoal: true, bend != null ? bend.bone2 : null);
+
+            return restore;
+        }
+
+        private Transform GetOrCreateFallbackBindingTransform(int idx, bool isBendGoal, Transform srcBone)
+        {
+            GameObject go = isBendGoal ? _bikEff[idx].FallbackBendGoalGo : _bikEff[idx].FallbackEffectorTargetGo;
+            if (go == null)
+            {
+                string name = "__BodyIkGizmoFallback_" + (isBendGoal ? "B" : "E") + "_" + idx;
+                go = new GameObject(name);
+                go.hideFlags = HideFlags.HideAndDontSave;
+                if (isBendGoal)
+                    _bikEff[idx].FallbackBendGoalGo = go;
+                else
+                    _bikEff[idx].FallbackEffectorTargetGo = go;
+            }
+
+            if (srcBone != null)
+                go.transform.SetPositionAndRotation(srcBone.position, srcBone.rotation);
+
+            return go.transform;
+        }
+
+        private static bool IsOwnedPluginBindingTransform(Transform tr)
+        {
+            if (tr == null || string.IsNullOrEmpty(tr.name))
+                return false;
+
+            return tr.name.StartsWith("__BodyIkGizmoProxy_", StringComparison.Ordinal)
+                || tr.name.StartsWith("__BodyIkGizmoFallback_", StringComparison.Ordinal);
+        }
+
+        private static bool IsOwnedProxyTransform(Transform tr)
+        {
+            return tr != null && tr.name != null && tr.name.StartsWith("__BodyIkGizmoProxy_", StringComparison.Ordinal);
+        }
+    }
+}
