@@ -17,6 +17,12 @@ namespace MainGameLogRelay
         Both = 2
     }
 
+    public enum LogRelayFileLayout
+    {
+        PerPlugin = 0,
+        Shared = 1
+    }
+
     [Serializable]
     public sealed class OwnerRule
     {
@@ -27,6 +33,8 @@ namespace MainGameLogRelay
         public LogRelayOutputMode OutputMode = LogRelayOutputMode.Both;
         public bool OverrideMinimumLevel = false;
         public LogRelayLevel MinimumLevel = LogRelayLevel.Info;
+        public bool OverrideFileLayout = false;
+        public LogRelayFileLayout FileLayout = LogRelayFileLayout.PerPlugin;
         public string LogKey = string.Empty;
     }
 
@@ -38,6 +46,7 @@ namespace MainGameLogRelay
         public bool DefaultOwnerEnabled = true;
         public LogRelayOutputMode DefaultOutputMode = LogRelayOutputMode.Both;
         public LogRelayLevel DefaultMinimumLevel = LogRelayLevel.Info;
+        public LogRelayFileLayout FileLayout = LogRelayFileLayout.PerPlugin;
         public bool LogInternalState = true;
         public OwnerRule[] OwnerRules = new OwnerRule[0];
     }

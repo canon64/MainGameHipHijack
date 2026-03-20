@@ -1,54 +1,23 @@
-﻿# MainGameTransformGizmo
+# MainGameTransformGizmo
 
-A runtime transform gizmo service plugin for KoikatsuSunshine main game scenes.
+## 概要
+- MainGame 用の Transform Gizmo コンポーネントと API を提供する基盤プラグインです。
+- 他プラグインから `TransformGizmoApi.Attach(...)` で利用される前提です。
 
-It provides attach/detach and manipulation helpers used by other plugins (notably MainGirlHipHijack).
+## 依存関係
+- 必須依存プラグインなし
+- 対象プロセス: `KoikatsuSunshine`
 
-## Runtime Targets
+## 導入
+- `MainGameTransformGizmo.dll` を `BepInEx/plugins/MainGameTransformGizmo/` に配置します。
 
-- `KoikatsuSunshine`
+## 基本操作
+- 本プラグイン単体に専用UIはありません。
+- 利用側プラグインが Gizmo の表示/非表示やドラッグイベントを制御します。
 
-## Hard Dependency
+## 設定とログ
+- 主要API: `TransformGizmoApi.Attach`, `TransformGizmoApi.TryAttach`
+- ログ: `BepInEx/plugins/MainGameTransformGizmo/_logs/info.txt`
 
-- `MainGameLogRelay`
-
-## What This Plugin Provides
-
-- `TransformGizmo` MonoBehaviour with runtime move/rotate/scale handles
-- `TransformGizmoApi` static API for other plugins:
-  - `Attach(GameObject)`
-  - `TryAttach(GameObject, out TransformGizmo)`
-  - `Get(GameObject)`
-  - `Detach(GameObject)`
-  - `GetSizeMultiplier(...)`
-  - `SetSizeMultiplier(...)`
-- Interaction model from source implementation:
-  - Center sphere click: cycle `Move -> Rotate -> Scale`
-  - Center sphere right-click: toggle `Local/World` axis space
-  - Axis drag: edit transform in current mode
-
-## Logging
-
-ConfigManager key:
-
-- `Logging/EnableLogs`
-
-When enabled, logs are routed through `MainGameLogRelay` with owner:
-
-- `com.kks.maingame.transformgizmo`
-
-## Files In This Folder
-
-- `MainGameTransformGizmo.dll`
-
-## Build (Source)
-
-- Target framework: `net472`
-- Build command: `dotnet build MainGameTransformGizmo.csproj -c Release`
-- Output DLL: `bin/Release/net472/MainGameTransformGizmo.dll`
-
-## Plugin Info
-
-- GUID: `com.kks.maingame.transformgizmo`
-- Name: `MainGameTransformGizmo`
-- Version: `0.1.0`
+## 注意点
+- `MainGameBlankMapAdd` などの依存先で必須扱いになるため、同時導入を推奨します。

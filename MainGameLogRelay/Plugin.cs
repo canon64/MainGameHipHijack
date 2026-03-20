@@ -22,6 +22,7 @@ namespace MainGameLogRelay
             public bool? Enabled;
             public LogRelayOutputMode? OutputMode;
             public LogRelayLevel? MinimumLevel;
+            public LogRelayFileLayout? FileLayout;
             public bool HasLogKey;
             public string LogKey = string.Empty;
         }
@@ -31,6 +32,7 @@ namespace MainGameLogRelay
             public bool Enabled;
             public LogRelayOutputMode OutputMode;
             public LogRelayLevel MinimumLevel;
+            public LogRelayFileLayout FileLayout;
             public string LogKey;
         }
 
@@ -39,6 +41,7 @@ namespace MainGameLogRelay
         private readonly Dictionary<string, RuntimeOwnerOverride> _runtimeOverrides = new Dictionary<string, RuntimeOwnerOverride>(StringComparer.Ordinal);
 
         private string _pluginDir;
+        private string _pluginsRootDir;
         private string _logRootDir;
         private MainGameLogRelaySettings _settings;
         private OwnerFileLogger _ownerFileLogger;
@@ -47,6 +50,7 @@ namespace MainGameLogRelay
         {
             Instance = this;
             _pluginDir = Path.GetDirectoryName(Info.Location) ?? string.Empty;
+            _pluginsRootDir = Directory.GetParent(_pluginDir)?.FullName ?? _pluginDir;
             _logRootDir = Path.Combine(_pluginDir, "log");
             Directory.CreateDirectory(_logRootDir);
 
@@ -151,6 +155,21 @@ namespace MainGameLogRelay
             InternalState("runtime override: owner=" + normalizedOwner + " minLevel=" + level);
         }
 
+        internal void SetOwnerFileLayout(string owner, LogRelayFileLayout fileLayout)
+        {
+            if (!TryNormalizeOwner(owner, out string normalizedOwner))
+                return;
+
+            fileLayout = NormalizeFileLayout(fileLayout);
+            lock (_sync)
+            {
+                RuntimeOwnerOverride ov = GetOrCreateRuntimeOverrideLocked(normalizedOwner);
+                ov.FileLayout = fileLayout;
+            }
+
+            InternalState("runtime override: owner=" + normalizedOwner + " fileLayout=" + fileLayout);
+        }
+
         internal void SetOwnerLogKey(string owner, string logKey)
         {
             if (!TryNormalizeOwner(owner, out string normalizedOwner))
@@ -194,12 +213,13 @@ namespace MainGameLogRelay
                 cfg = ResolveEffectiveConfigLocked(normalizedOwner);
             }
 
-            string path = ResolveOwnerLogPath(normalizedOwner, cfg.LogKey, logKeyWasFallback: false);
+            string path = ResolveOwnerLogPath(normalizedOwner, cfg.LogKey, cfg.FileLayout, logKeyWasFallback: false);
             return "relayEnabled=" + relayEnabled
                 + ", owner=" + normalizedOwner
                 + ", enabled=" + cfg.Enabled
                 + ", mode=" + cfg.OutputMode
                 + ", minLevel=" + cfg.MinimumLevel
+                + ", fileLayout=" + cfg.FileLayout
                 + ", logPath=" + path;
         }
 
@@ -214,9 +234,11 @@ namespace MainGameLogRelay
                     + ", defaultOwnerEnabled=" + _settings.DefaultOwnerEnabled
                     + ", defaultMode=" + _settings.DefaultOutputMode
                     + ", defaultMinLevel=" + _settings.DefaultMinimumLevel
+                    + ", defaultFileLayout=" + NormalizeFileLayout(_settings.FileLayout)
                     + ", ownerRules=" + _ownerRules.Count
                     + ", runtimeOverrides=" + _runtimeOverrides.Count
-                    + ", logRoot=" + _logRootDir;
+                    + ", pluginsRoot=" + _pluginsRootDir
+                    + ", fallbackLogRoot=" + _logRootDir;
             }
         }
 
@@ -251,7 +273,7 @@ namespace MainGameLogRelay
 
             if (mode == LogRelayOutputMode.FileOnly || mode == LogRelayOutputMode.Both)
             {
-                string ownerPath = ResolveOwnerLogPath(owner, cfg.LogKey, logKeyWasFallback: false);
+                string ownerPath = ResolveOwnerLogPath(owner, cfg.LogKey, cfg.FileLayout, logKeyWasFallback: false);
                 _ownerFileLogger?.Write(ownerPath, levelText, message);
             }
 
@@ -273,7 +295,7 @@ namespace MainGameLogRelay
             }
         }
 
-        private string ResolveOwnerLogPath(string owner, string rawLogKey, bool logKeyWasFallback)
+        private string ResolveOwnerLogPath(string owner, string rawLogKey, LogRelayFileLayout fileLayout, bool logKeyWasFallback)
         {
             string key = string.IsNullOrWhiteSpace(rawLogKey) ? owner : rawLogKey;
             if (!TryNormalizeLogKey(key, out string normalized))
@@ -286,36 +308,129 @@ namespace MainGameLogRelay
             if (string.IsNullOrWhiteSpace(normalized))
                 normalized = "unknown_owner";
 
-            string relative = normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
-                ? normalized
-                : normalized + ".log";
+            if (NormalizeFileLayout(fileLayout) == LogRelayFileLayout.Shared)
+            {
+                string relative = normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
+                    ? normalized
+                    : normalized + ".log";
 
-            string combined = Path.Combine(_logRootDir, relative.Replace('/', Path.DirectorySeparatorChar));
-            string full = Path.GetFullPath(combined);
-            string root = EnsureTrailingSeparator(Path.GetFullPath(_logRootDir));
+                string combined = Path.Combine(_logRootDir, relative.Replace('/', Path.DirectorySeparatorChar));
+                string fullShared = Path.GetFullPath(combined);
+                string rootShared = EnsureTrailingSeparator(Path.GetFullPath(_logRootDir));
+                if (!fullShared.StartsWith(rootShared, StringComparison.OrdinalIgnoreCase))
+                {
+                    string fallbackShared = "unknown_owner.log";
+                    fullShared = Path.Combine(_logRootDir, fallbackShared);
+                    if (ShouldLogInternalState())
+                        InternalWarn("resolved shared log path escaped root. owner=" + owner + " key=" + normalized + " fallback=" + fallbackShared);
+                }
+
+                return fullShared;
+            }
+
+            ResolveOwnerLogRoute(normalized, owner, out string pluginFolder, out string fileName);
+            string pluginBase = Path.Combine(_pluginsRootDir, pluginFolder);
+            string pluginLogRoot = Path.Combine(pluginBase, "log");
+            string full = Path.GetFullPath(Path.Combine(pluginLogRoot, fileName));
+            string root = EnsureTrailingSeparator(Path.GetFullPath(pluginLogRoot));
 
             if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
             {
                 string fallback = "unknown_owner.log";
                 full = Path.Combine(_logRootDir, fallback);
                 if (ShouldLogInternalState())
-                    InternalWarn("resolved log path escaped root. owner=" + owner + " relative=" + relative + " fallback=" + fallback);
+                    InternalWarn("resolved log path escaped root. owner=" + owner + " key=" + normalized + " fallback=" + fallback);
             }
 
             return full;
+        }
+
+        private static void ResolveOwnerLogRoute(string normalizedKey, string owner, out string pluginFolder, out string fileName)
+        {
+            pluginFolder = "unknown_owner";
+            fileName = "unknown_owner.log";
+
+            string[] segments = normalizedKey.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+                return;
+
+            int stemStart = 0;
+            string pluginToken = segments[0];
+            if (segments.Length >= 2 && IsScopeSegment(segments[0]))
+            {
+                pluginToken = segments[1];
+                stemStart = 1;
+            }
+
+            int dot = pluginToken.IndexOf('.');
+            if (dot > 0)
+                pluginToken = pluginToken.Substring(0, dot);
+            if (string.IsNullOrWhiteSpace(pluginToken))
+                pluginToken = owner;
+            pluginToken = SanitizeFileNameSegment(pluginToken);
+            if (string.IsNullOrWhiteSpace(pluginToken))
+                pluginToken = "unknown_owner";
+            pluginFolder = pluginToken;
+
+            string stem;
+            if (stemStart < segments.Length)
+            {
+                stem = string.Join(".", segments, stemStart, segments.Length - stemStart);
+            }
+            else
+            {
+                stem = pluginFolder;
+            }
+
+            if (string.IsNullOrWhiteSpace(stem))
+                stem = pluginFolder;
+            stem = SanitizeFileNameSegment(stem);
+            if (string.IsNullOrWhiteSpace(stem))
+                stem = pluginFolder;
+            if (!stem.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
+                stem += ".log";
+            fileName = stem;
+        }
+
+        private static bool IsScopeSegment(string segment)
+        {
+            if (string.IsNullOrEmpty(segment))
+                return false;
+            return string.Equals(segment, "main", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "studio", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "vr", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "shared", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "global", StringComparison.OrdinalIgnoreCase);
         }
 
         private void ResetOwnerLogsOnStartup()
         {
             try
             {
-                if (!Directory.Exists(_logRootDir))
-                    Directory.CreateDirectory(_logRootDir);
-
-                string[] files = Directory.GetFiles(_logRootDir, "*.log", SearchOption.AllDirectories);
-                for (int i = 0; i < files.Length; i++)
+                if (Directory.Exists(_pluginsRootDir))
                 {
-                    try { File.Delete(files[i]); } catch { }
+                    string[] pluginDirs = Directory.GetDirectories(_pluginsRootDir);
+                    for (int i = 0; i < pluginDirs.Length; i++)
+                    {
+                        string pluginLogDir = Path.Combine(pluginDirs[i], "log");
+                        if (!Directory.Exists(pluginLogDir))
+                            continue;
+
+                        string[] files = Directory.GetFiles(pluginLogDir, "*.log", SearchOption.AllDirectories);
+                        for (int j = 0; j < files.Length; j++)
+                        {
+                            try { File.Delete(files[j]); } catch { }
+                        }
+                    }
+                }
+
+                if (Directory.Exists(_logRootDir))
+                {
+                    string[] fallbackFiles = Directory.GetFiles(_logRootDir, "*.log", SearchOption.AllDirectories);
+                    for (int i = 0; i < fallbackFiles.Length; i++)
+                    {
+                        try { File.Delete(fallbackFiles[i]); } catch { }
+                    }
                 }
             }
             catch (Exception ex)
@@ -357,6 +472,7 @@ namespace MainGameLogRelay
                 Enabled = _settings == null || _settings.DefaultOwnerEnabled,
                 OutputMode = _settings == null ? LogRelayOutputMode.Both : NormalizeMode(_settings.DefaultOutputMode),
                 MinimumLevel = _settings == null ? LogRelayLevel.Info : NormalizeLevel(_settings.DefaultMinimumLevel),
+                FileLayout = _settings == null ? LogRelayFileLayout.PerPlugin : NormalizeFileLayout(_settings.FileLayout),
                 LogKey = string.Empty
             };
 
@@ -368,6 +484,8 @@ namespace MainGameLogRelay
                     cfg.OutputMode = NormalizeMode(baseRule.OutputMode);
                 if (baseRule.OverrideMinimumLevel)
                     cfg.MinimumLevel = NormalizeLevel(baseRule.MinimumLevel);
+                if (baseRule.OverrideFileLayout)
+                    cfg.FileLayout = NormalizeFileLayout(baseRule.FileLayout);
                 if (!string.IsNullOrWhiteSpace(baseRule.LogKey))
                     cfg.LogKey = baseRule.LogKey.Trim();
             }
@@ -380,6 +498,8 @@ namespace MainGameLogRelay
                     cfg.OutputMode = NormalizeMode(runtime.OutputMode.Value);
                 if (runtime.MinimumLevel.HasValue)
                     cfg.MinimumLevel = NormalizeLevel(runtime.MinimumLevel.Value);
+                if (runtime.FileLayout.HasValue)
+                    cfg.FileLayout = NormalizeFileLayout(runtime.FileLayout.Value);
                 if (runtime.HasLogKey)
                     cfg.LogKey = runtime.LogKey == null ? string.Empty : runtime.LogKey.Trim();
             }
@@ -436,6 +556,15 @@ namespace MainGameLogRelay
             if (mode > LogRelayOutputMode.Both)
                 return LogRelayOutputMode.Both;
             return mode;
+        }
+
+        private static LogRelayFileLayout NormalizeFileLayout(LogRelayFileLayout layout)
+        {
+            if (layout < LogRelayFileLayout.PerPlugin)
+                return LogRelayFileLayout.PerPlugin;
+            if (layout > LogRelayFileLayout.Shared)
+                return LogRelayFileLayout.Shared;
+            return layout;
         }
 
         private static string ToLevelText(LogRelayLevel level)

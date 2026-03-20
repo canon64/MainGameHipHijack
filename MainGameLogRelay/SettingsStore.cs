@@ -62,6 +62,7 @@ namespace MainGameLogRelay
 
             settings.DefaultMinimumLevel = NormalizeLevel(settings.DefaultMinimumLevel);
             settings.DefaultOutputMode = NormalizeMode(settings.DefaultOutputMode);
+            settings.FileLayout = NormalizeFileLayout(settings.FileLayout);
 
             for (int i = 0; i < settings.OwnerRules.Length; i++)
             {
@@ -76,6 +77,7 @@ namespace MainGameLogRelay
                 rule.LogKey = rule.LogKey ?? string.Empty;
                 rule.MinimumLevel = NormalizeLevel(rule.MinimumLevel);
                 rule.OutputMode = NormalizeMode(rule.OutputMode);
+                rule.FileLayout = NormalizeFileLayout(rule.FileLayout);
             }
 
             return settings;
@@ -97,6 +99,15 @@ namespace MainGameLogRelay
             if (mode > LogRelayOutputMode.Both)
                 return LogRelayOutputMode.Both;
             return mode;
+        }
+
+        private static LogRelayFileLayout NormalizeFileLayout(LogRelayFileLayout layout)
+        {
+            if (layout < LogRelayFileLayout.PerPlugin)
+                return LogRelayFileLayout.PerPlugin;
+            if (layout > LogRelayFileLayout.Shared)
+                return LogRelayFileLayout.Shared;
+            return layout;
         }
 
         private static void SaveInternal(string path, MainGameLogRelaySettings settings, bool backup, Action<string> logWarn)
