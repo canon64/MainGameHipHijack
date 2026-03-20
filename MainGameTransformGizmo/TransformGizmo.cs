@@ -504,6 +504,9 @@ namespace MainGameTransformGizmo
                 return;
             }
 
+            // Ensure the release-frame cursor position is reflected once before ending drag.
+            // Without this, the gizmo may snap slightly to the previous frame's pose on mouse-up.
+            UpdateDrag(cam, mouse);
             _dragging = false;
             _dragAxis = -1;
             CommitDragHistoryIfChanged();

@@ -324,6 +324,8 @@ namespace MainGirlHipHijack
                 _bikEff[idx].FollowBone = null;
                 _bikEff[idx].FollowBonePositionOffset = Vector3.zero;
                 _bikEff[idx].FollowBoneRotationOffset = Quaternion.identity;
+                _bikEff[idx].HasPostDragHold = false;
+                _bikEff[idx].PostDragHoldFrames = 0;
 
                 // VRスフィアマーカー生成（デフォルト非表示、VRGrabMode ONで表示）
                 var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -378,6 +380,8 @@ namespace MainGirlHipHijack
             _runtime.Fbbik.enabled = true;
             _bikEff[idx].Running = true;
             _bikEff[idx].GizmoDragging = false;
+            _bikEff[idx].HasPostDragHold = false;
+            _bikEff[idx].PostDragHoldFrames = 0;
 
             // VRGrabMode中であれば即座にマーカーを表示（ONにした後でIKを有効化した場合も対応）
             if (_vrGrabMode && _bikEff[idx].VRMarkerGo != null)
@@ -429,6 +433,8 @@ namespace MainGirlHipHijack
                 if (!deferDragRecompute)
                     RecomputeGizmoDraggingState();
             }
+            _bikEff[idx].HasPostDragHold = false;
+            _bikEff[idx].PostDragHoldFrames = 0;
 
             if (_runtime.Fbbik != null)
             {
@@ -804,6 +810,7 @@ namespace MainGirlHipHijack
             UpdateFollowBones();
             UpdateFollowBoneVisuals();
             EnsureOnBindingsForRunningBodyIK();
+            ApplyPostDragHoldToBodyIK();
 
             for (int i = 0; i < BIK_TOTAL; i++)
             {
@@ -831,6 +838,37 @@ namespace MainGirlHipHijack
                 BodyIkDiagSnapshot diagAfter;
                 if (TryCaptureBodyIkDiagSnapshot(diagIdx, out diagAfter))
                     LogBodyIkDiagnostics(diagBefore, diagAfter, skippedByAbandon: false);
+            }
+        }
+
+        private void ApplyPostDragHoldToBodyIK()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                BIKEffectorState state = _bikEff[i];
+                if (state == null || !state.Running || state.Proxy == null)
+                    continue;
+                if (!state.HasPostDragHold || state.PostDragHoldFrames <= 0)
+                    continue;
+
+                state.Proxy.SetPositionAndRotation(state.PostDragHoldPos, state.PostDragHoldRot);
+
+                // While hold is active, keep follow offsets synchronized to the held world pose.
+                // This prevents a snap when follow resumes against a moving follow bone (e.g. chest).
+                if (state.FollowBone != null)
+                {
+                    state.FollowBonePositionOffset =
+                        Quaternion.Inverse(state.FollowBone.rotation) * (state.PostDragHoldPos - state.FollowBone.position);
+                    if (IsRotationDrivenEffector(i))
+                    {
+                        state.FollowBoneRotationOffset =
+                            Quaternion.Inverse(state.FollowBone.rotation) * state.PostDragHoldRot;
+                    }
+                }
+
+                state.PostDragHoldFrames--;
+                if (state.PostDragHoldFrames <= 0)
+                    state.HasPostDragHold = false;
             }
         }
 

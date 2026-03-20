@@ -19,6 +19,10 @@ namespace MainGirlHipHijack
             public Quaternion StartRot;
             public Vector3 TargetPos;
             public Quaternion TargetRot;
+            public bool RebindFollowAfterTransition;
+            public Transform FollowBone;
+            public Vector3 FollowPositionOffset;
+            public Quaternion FollowRotationOffset;
         }
 
         private void SaveCurrentPosePresetWithScreenshot(string requestedName)
@@ -149,7 +153,7 @@ namespace MainGirlHipHijack
             StopPoseTransitionIfRunning();
             Transform followRoot = GetPosePresetRootTransform();
 
-            float transitionSeconds = GetPoseTransitionSeconds();
+            float transitionSeconds = GetEffectivePoseTransitionSeconds();
             var transitionPoints = new List<PoseTransitionPoint>();
             for (int i = 0; i < BIK_TOTAL; i++)
             {
@@ -184,9 +188,19 @@ namespace MainGirlHipHijack
                 }
 
                 SetBodyIK(i, true, saveSettings: false, reason: reason + "-on");
-                bool followApplied = TryApplyPosePresetFollowBinding(i, followRoot, entry);
-                if (!followApplied)
-                    ClearBodyIKFollowBone(i);
+                Transform followBone;
+                Vector3 followPosOffset;
+                Quaternion followRotOffset;
+                bool hasFollowBinding = TryResolvePosePresetFollowBinding(
+                    i,
+                    followRoot,
+                    entry,
+                    out followBone,
+                    out followPosOffset,
+                    out followRotOffset);
+
+                // During transition, keep effector free so easing on proxy pose is visible and stable.
+                ClearBodyIKFollowBone(i);
                 float startWeight = GetBodyIKWeight(i);
 
                 var point = new PoseTransitionPoint
@@ -195,9 +209,13 @@ namespace MainGirlHipHijack
                     StartWeight = startWeight,
                     TargetWeight = targetWeight,
                     DisableAfterTransition = false,
-                    HasPose = entry.hasProxyPose && !followApplied,
+                    HasPose = entry.hasProxyPose,
                     TargetPos = entry.proxyPosition,
-                    TargetRot = entry.proxyRotation
+                    TargetRot = entry.proxyRotation,
+                    RebindFollowAfterTransition = hasFollowBinding,
+                    FollowBone = followBone,
+                    FollowPositionOffset = followPosOffset,
+                    FollowRotationOffset = followRotOffset
                 };
 
                 if (_bikEff[i].Proxy != null)
@@ -220,29 +238,7 @@ namespace MainGirlHipHijack
             _poseTransitionPresetId = preset.id;
             SetFemaleHeadAdditiveFromPreset(preset);
 
-            if (transitionSeconds > 0f && transitionPoints.Count > 0)
-            {
-                _poseTransitionCoroutine = StartCoroutine(ApplyPoseTransitionCoroutine(transitionPoints, transitionSeconds, preset.id));
-            }
-            else
-            {
-                for (int i = 0; i < transitionPoints.Count; i++)
-                {
-                    PoseTransitionPoint point = transitionPoints[i];
-                    SetBodyIKWeight(point.Index, point.TargetWeight, saveSettings: false);
-
-                    if (!point.HasPose)
-                        continue;
-                    if (!_bikEff[point.Index].Running || _bikEff[point.Index].Proxy == null)
-                        continue;
-
-                    _bikEff[point.Index].Proxy.SetPositionAndRotation(point.TargetPos, point.TargetRot);
-                }
-
-                _poseTransitionCoroutine = null;
-                _poseTransitionPresetId = null;
-                SaveSettings();
-            }
+            _poseTransitionCoroutine = StartCoroutine(ApplyPoseTransitionCoroutine(transitionPoints, transitionSeconds, preset.id));
 
             LogInfo("[PosePreset] applied id=" + preset.id + " name=" + preset.name + " reason=" + reason
                 + " transition=" + transitionSeconds.ToString("F3")
@@ -282,6 +278,42 @@ namespace MainGirlHipHijack
             _bikEff[idx].CandidateBone = null;
             _bikEff[idx].FollowBonePositionOffset = entry.followPositionOffset;
             _bikEff[idx].FollowBoneRotationOffset = IsRotationDrivenEffector(idx)
+                ? entry.followRotationOffset
+                : Quaternion.identity;
+            return true;
+        }
+
+        private bool TryResolvePosePresetFollowBinding(
+            int idx,
+            Transform root,
+            PosePresetEntryRuntime entry,
+            out Transform bone,
+            out Vector3 positionOffset,
+            out Quaternion rotationOffset)
+        {
+            bone = null;
+            positionOffset = Vector3.zero;
+            rotationOffset = Quaternion.identity;
+
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return false;
+            if (!CanUseBoneFollow(idx))
+                return false;
+            if (!_bikEff[idx].Running || _bikEff[idx].Proxy == null)
+                return false;
+            if (root == null || entry == null || !entry.hasFollowBone || entry.followBonePath == null)
+                return false;
+
+            Transform resolved = FindByRelativePath(root, entry.followBonePath);
+            if (resolved == null)
+            {
+                LogWarn("[PosePreset] follow bone missing idx=" + idx + " path=" + entry.followBonePath);
+                return false;
+            }
+
+            bone = resolved;
+            positionOffset = entry.followPositionOffset;
+            rotationOffset = IsRotationDrivenEffector(idx)
                 ? entry.followRotationOffset
                 : Quaternion.identity;
             return true;
@@ -339,12 +371,38 @@ namespace MainGirlHipHijack
                 SetBodyIK(point.Index, false, saveSettings: false, reason: "transition-off");
             }
 
+            for (int i = 0; i < points.Count; i++)
+            {
+                PoseTransitionPoint point = points[i];
+                if (!point.RebindFollowAfterTransition)
+                    continue;
+                if (point.Index < 0 || point.Index >= BIK_TOTAL)
+                    continue;
+                if (!_bikEff[point.Index].Running || _bikEff[point.Index].Proxy == null)
+                    continue;
+                if (point.FollowBone == null)
+                    continue;
+
+                _bikEff[point.Index].FollowBone = point.FollowBone;
+                _bikEff[point.Index].CandidateBone = null;
+                _bikEff[point.Index].FollowBonePositionOffset = point.FollowPositionOffset;
+                _bikEff[point.Index].FollowBoneRotationOffset = IsRotationDrivenEffector(point.Index)
+                    ? point.FollowRotationOffset
+                    : Quaternion.identity;
+            }
+
             _poseTransitionCoroutine = null;
             _poseTransitionPresetId = null;
             SaveSettings();
             LogInfo("[PosePreset] transition complete id=" + (presetId ?? "(null)")
                 + " sec=" + duration.ToString("F3")
                 + " easing=" + GetPoseTransitionEasing());
+        }
+
+        private float GetEffectivePoseTransitionSeconds()
+        {
+            // Always route through transition/easing path to avoid auto-apply teleport.
+            return Mathf.Max(0.01f, GetPoseTransitionSeconds());
         }
 
         private void StopPoseTransitionIfRunning()

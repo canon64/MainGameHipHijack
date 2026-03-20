@@ -20,6 +20,20 @@ namespace MainGirlHipHijack
             state.GizmoDragging = dragging;
             LogDebug("gizmo drag " + (dragging ? "ON" : "OFF") + " idx=" + idx);
 
+            if (dragging)
+            {
+                state.HasPostDragHold = false;
+                state.PostDragHoldFrames = 0;
+            }
+            else if (state.Proxy != null)
+            {
+                state.PostDragHoldPos = state.Proxy.position;
+                state.PostDragHoldRot = state.Proxy.rotation;
+                state.PostDragHoldFrames = BodyIkPostDragHoldFrames;
+                state.HasPostDragHold = true;
+                LogDebug("post-drag hold armed idx=" + idx + " frames=" + state.PostDragHoldFrames);
+            }
+
             // ドラッグ終了時に追従オフセットを再計算して保存する。
             // これによりドラッグ後の位置を新しい追従基準として維持できる。
             if (!dragging && state.FollowBone != null && state.Proxy != null)

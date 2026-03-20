@@ -73,8 +73,7 @@ namespace MainGirlHipHijack
                     new GUIContent("詳細ログ", "入力キャプチャ/状態監視などの詳細ログを出力する"));
                 if (detailLog != _settings.DetailLogEnabled)
                 {
-                    _settings.DetailLogEnabled = detailLog;
-                    SaveSettings();
+                    SetDetailLoggingEnabled(detailLog, "ui-toggle");
                 }
 
                 bool bodyIkDiag = GUILayout.Toggle(_settings.BodyIkDiagnosticLog,

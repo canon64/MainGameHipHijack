@@ -1,30 +1,31 @@
-# HipHijack
+﻿# MainGirlHipHijack
 
-KoikatsuSunshine (BepInEx 5 / net472) 向けプラグインのソース一式です。
+MainGirlHipHijack 系で使用する KKS BepInEx プラグイン群のソース公開リポジトリです。
 
-英語版: [README.md](README.md)
+English version: [README.md](README.md)
 
-このリポジトリには次の 5 プラグインのソースを含みます。
+## 同梱プラグイン
 
-- MainGirlHipHijack
-- MainGameTransformGizmo
-- MainGameUiInputCapture
-- MainGirlShoulderIkStabilizer
-- MainGameLogRelay
+- `MainGirlHipHijack` - 女キャラ BodyIK 制御、ギズモ編集、ポーズプリセット自動適用
+- `MainGameTransformGizmo` - IK/オブジェクト操作用のランタイム変形ギズモ
+- `MainGameUiInputCapture` - ドラッグ/編集時の UI 入力キャプチャ統合制御
+- `MainGirlShoulderIkStabilizer` - 肩 IK の安定化補助
+- `MainGameLogRelay` - プラグイン群で共通利用するログ中継
 
 ## ビルド
 
+各プラグインは個別にビルドします（`net472`、BepInEx 5.x）。
+
 ```powershell
-dotnet build .\MainGameLogRelay\MainGameLogRelay.csproj -c Release
+dotnet build .\MainGirlHipHijack\MainGirlHipHijack.csproj -c Release
 dotnet build .\MainGameTransformGizmo\MainGameTransformGizmo.csproj -c Release
 dotnet build .\MainGameUiInputCapture\MainGameUiInputCapture.csproj -c Release
 dotnet build .\MainGirlShoulderIkStabilizer\MainGirlShoulderIkStabilizer.csproj -c Release
-dotnet build .\MainGirlHipHijack\MainGirlHipHijack.csproj -c Release
+dotnet build .\MainGameLogRelay\MainGameLogRelay.csproj -c Release
 ```
 
-## DLL リリース
+## リリース（DLL）
 
-ビルド済み DLL は GitHub Releases の `canon_plugins_bundle.zip` に添付します。
-配置先:
+ビルド済み DLL は GitHub Releases のバンドル zip として配布します。
 
-`BepInEx/plugins/canon_plugins/`
+- Releases: https://github.com/canon64/MainGirlHipHijack/releases

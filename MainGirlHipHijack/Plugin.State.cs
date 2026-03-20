@@ -34,6 +34,10 @@ namespace MainGirlHipHijack
             public Quaternion GrabStartProxyRot;
             public GameObject VRMarkerGo;
             public Renderer   VRMarkerRend;
+            public bool HasPostDragHold;
+            public int PostDragHoldFrames;
+            public Vector3 PostDragHoldPos;
+            public Quaternion PostDragHoldRot;
         }
 
         private sealed class RuntimeState

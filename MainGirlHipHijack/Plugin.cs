@@ -77,6 +77,7 @@ namespace MainGirlHipHijack
         private ConfigEntry<bool> _cfgPluginEnabled;
         private ConfigEntry<bool> _cfgUiVisible;
         private ConfigEntry<bool> _cfgRelayLogEnabled;
+        private bool _syncingDetailLogSwitch;
         private string _pluginDir;
 
         private Rect _windowRect = new Rect(20f, 20f, 620f, 620f);
@@ -96,6 +97,7 @@ namespace MainGirlHipHijack
         private string _pendingAbandonTrigger;
         private float _pendingAbandonRequestTime;
         private const float PendingAbandonFallbackDelaySeconds = 0.2f;
+        private const int BodyIkPostDragHoldFrames = 2;
         private bool _vrGrabMode;
         private Controller.Lock _vrGrabLockLeft;
         private Controller.Lock _vrGrabLockRight;
@@ -367,16 +369,16 @@ namespace MainGirlHipHijack
             _cfgRelayLogEnabled = Config.Bind(
                 "Logging",
                 "EnableLogs",
-                false,
+                _settings != null && _settings.DetailLogEnabled,
                 "MainGameLogRelay経由ログのON/OFF（HipHijack本体＋input owner）");
 
             _cfgRelayLogEnabled.SettingChanged += (_, __) =>
             {
-                ApplyRelayLoggingState();
+                SetDetailLoggingEnabled(_cfgRelayLogEnabled != null && _cfgRelayLogEnabled.Value, "config-changed");
             };
 
             _settings.UiVisible = _cfgUiVisible.Value;
-            ApplyRelayLoggingState();
+            SetDetailLoggingEnabled(_cfgRelayLogEnabled != null && _cfgRelayLogEnabled.Value, "bind-init");
         }
 
         private void ApplyRelayLoggingState()
@@ -389,6 +391,41 @@ namespace MainGirlHipHijack
             LogRelayApi.SetOwnerEnabled(RelayOwner, enabled);
             LogRelayApi.SetOwnerLogKey(InputCaptureOwnerKey, InputCaptureRelayLogKey);
             LogRelayApi.SetOwnerEnabled(InputCaptureOwnerKey, enabled);
+        }
+
+        private void SetDetailLoggingEnabled(bool enabled, string reason)
+        {
+            if (_syncingDetailLogSwitch)
+                return;
+
+            _syncingDetailLogSwitch = true;
+            try
+            {
+                bool settingsChanged = _settings != null && _settings.DetailLogEnabled != enabled;
+                if (_settings != null)
+                    _settings.DetailLogEnabled = enabled;
+
+                bool cfgChanged = _cfgRelayLogEnabled != null && _cfgRelayLogEnabled.Value != enabled;
+                if (cfgChanged)
+                    _cfgRelayLogEnabled.Value = enabled;
+
+                ApplyRelayLoggingState();
+                if (UiInputCaptureApi.IsAvailable)
+                    UiInputCaptureApi.SetOwnerDebug(InputCaptureOwnerKey, enabled);
+
+                if (settingsChanged)
+                    SaveSettings();
+
+                if (_settings != null && _settings.VerboseLog)
+                    LogInfo("detail/relay logs " + (enabled ? "ON" : "OFF")
+                        + " reason=" + reason
+                        + " cfgChanged=" + cfgChanged
+                        + " settingsChanged=" + settingsChanged);
+            }
+            finally
+            {
+                _syncingDetailLogSwitch = false;
+            }
         }
 
         private void ApplySettingsToRuntime()

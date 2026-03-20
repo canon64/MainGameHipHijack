@@ -27,6 +27,8 @@ namespace MainGirlHipHijack
                     continue;
                 if (_bikEff[i].Proxy == null)
                     continue;
+                if (_bikEff[i].HasPostDragHold && _bikEff[i].PostDragHoldFrames > 0)
+                    continue;
 
                 Vector3 targetPos = _bikEff[i].FollowBone.position
                     + (_bikEff[i].FollowBone.rotation * _bikEff[i].FollowBonePositionOffset);
