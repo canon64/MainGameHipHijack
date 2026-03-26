@@ -353,19 +353,7 @@ namespace MainGirlHipHijack
                 // ── 初回 or 再有効化: フルセットアップ ──
                 _settings.SpeedHijackEnabled = true;
                 _settings.CutFemaleAnimSpeedEnabled = true;
-
-                // 保存済み want があれば復元（腰IKは常に明示ONする）
-                if (_hipQuickSetupSavedWant != null)
-                {
-                    for (int i = 0; i < BIK_TOTAL; i++)
-                    {
-                        if (i == BIK_BODY)
-                            continue;
-                        if (_hipQuickSetupSavedWant[i])
-                            SetBodyIK(i, on: true, saveSettings: false, reason: "quick-setup-restore");
-                    }
-                    _hipQuickSetupSavedWant = null;
-                }
+                _hipQuickSetupSavedWant = null;
 
                 // 腰IKはON処理のたびに必ず有効化する
                 ResetBodyIKPartToAnimationPose(BIK_BODY, stopPoseTransition: true, logSnapshot: false, applyImmediate: true);
@@ -383,18 +371,12 @@ namespace MainGirlHipHijack
             }
             else
             {
-                // ── 2回目: 全IK OFF + 腰リンクOFF + 左コン復帰 ──
-                // 現在のwant状態を保存
-                _hipQuickSetupSavedWant = new bool[BIK_TOTAL];
-                for (int i = 0; i < BIK_TOTAL; i++)
-                    _hipQuickSetupSavedWant[i] = i != BIK_BODY && _bikWant[i];
+                // ── 2回目: 腰IK OFF + 腰リンクOFF + 左コン復帰 ──
+                _hipQuickSetupSavedWant = null;
 
-                // 全エフェクタOFF
-                for (int i = 0; i < BIK_TOTAL; i++)
-                {
-                    ResetBodyIKPartToAnimationPose(i, stopPoseTransition: false, logSnapshot: false, applyImmediate: true);
-                    SetBodyIK(i, on: false, saveSettings: false, reason: "quick-setup-off");
-                }
+                // 腰中央IKのみOFF（他IKには触れない）
+                ResetBodyIKPartToAnimationPose(BIK_BODY, stopPoseTransition: false, logSnapshot: false, applyImmediate: true);
+                SetBodyIK(BIK_BODY, on: false, saveSettings: false, reason: "quick-setup-off");
 
                 // SpeedHijack / CutFemaleAnimSpeed OFF
                 _settings.SpeedHijackEnabled = false;
