@@ -25,6 +25,7 @@ namespace MainGirlHipHijack
             public System.Action<GizmoMode> GizmoModeHandler;
             public bool GizmoDragging;
             public float BendGoalRadius;
+            public Vector3 BendGoalLocalDirection;
             public Transform FollowBone;
             public Vector3 FollowBonePositionOffset;
             public Quaternion FollowBoneRotationOffset;

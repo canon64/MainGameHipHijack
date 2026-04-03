@@ -1,31 +1,44 @@
-﻿# canon_plugins (MainGirlHipHijack profile)
+﻿# MainGirlHipHijack
 
-MainGirlHipHijack を中心にした、KKS向けプラグイン群のCS配布用READMEです。
+MainGirlHipHijack 系で使用する KKS BepInEx プラグイン群のソース公開リポジトリです。
 
-## このプロファイルの主用途
-- Hシーン中の女性BodyIK操作
-- 追従ボーン編集・ギズモ編集
-- 頭角度のスライダー/ギズモ操作
-- 体位一致のポーズ自動呼び出し
-- VR時にトリガーを押しながら `B` で女性腰IKを有効化し、左コントローラーへ親子付けして実コントローラー動作をゲーム内へ反映
+English version: [README.md](README.md)
 
-## 含まれるプラグイン（CS/DLL対象）
-- MainGirlHipHijack
-- MainGameTransformGizmo
-- MainGameUiInputCapture
-- MainGameLogRelay
+## 同梱プラグイン
 
-## 任意同梱（推奨）
-- MainGirlShoulderIkStabilizer
-  - 必須依存ではないが、HipHijack配布プロファイルでは同梱対象
+- `MainGirlHipHijack` - 女キャラ BodyIK 制御、ギズモ編集、ポーズプリセット自動適用
+- `MainGameTransformGizmo` - IK/オブジェクト操作用のランタイム変形ギズモ
+- `MainGameUiInputCapture` - ドラッグ/編集時の UI 入力キャプチャ統合制御
+- `MainGirlShoulderIkStabilizer` - 肩IK安定化補助（現在は AdvIK 反射ブリッジ版）
+- `MainGameLogRelay` - プラグイン群で共通利用するログ中継
+- `MainGameAdvIkBridge` - AdvIK 反射連携用の任意ソース
 
-## MainGameBlankMapAdd 連携
-- MainGameBlankMapAdd が導入され、VideoAllposeRoom を使用している場合、
-  再生バーから MainGirlHipHijack UI の表示/非表示を切り替え可能
-- 再生バー2段目の `説明` の右側 `HipUI` チェックで切り替え
+## ビルド
 
-## 主要設定ファイル
-- BepInEx/plugins/canon_plugins/MainGirlHipHijack/FullIkGizmoSettings.json
+各プラグインは個別にビルドします（`net472`、BepInEx 5.x）。
 
-## ログ
-- BepInEx/plugins/canon_plugins/MainGirlHipHijack/MainGirlHipHijack.log
+```powershell
+dotnet build .\MainGirlHipHijack\MainGirlHipHijack.csproj -c Release
+dotnet build .\MainGameTransformGizmo\MainGameTransformGizmo.csproj -c Release
+dotnet build .\MainGameUiInputCapture\MainGameUiInputCapture.csproj -c Release
+dotnet build .\MainGirlShoulderIkStabilizer\MainGirlShoulderIkStabilizer.csproj -c Release
+dotnet build .\MainGameLogRelay\MainGameLogRelay.csproj -c Release
+dotnet build .\MainGameAdvIkBridge\MainGameAdvIkBridge.csproj -c Release
+```
+
+## リリース（DLL）
+
+ビルド済み DLL は GitHub Releases のバンドル zip として配布します。
+
+- Releases: https://github.com/canon64/MainGirlHipHijack/releases
+
+## 変更履歴
+
+### 2026-04-03
+
+- BodyIK の腕IK（左腕/右腕）ON/OFF時に、肩安定化側へ実行状態を通知する連携を追加
+- 肩連携の自動同期ロジックを追加し、腕IK状態に応じて ShoulderIkStabilizer の有効状態を追従
+- BodyIK 診断ログを拡張し、追従ターゲット距離・関節角度・肩連携状態の診断情報を追加
+- 近接追従の候補判定に「首より上候補を全許可(検証)」設定を追加
+- 設定項目 `FollowAllowAllHeadBonesForSnap` を追加（既定: true）
+- 状態保持に `BendGoalLocalDirection` を追加し、屈曲目標の扱いを補強

@@ -398,6 +398,9 @@ namespace MainGirlHipHijack
 
             _runtime.Fbbik.enabled = true;
             _bikEff[idx].Running = true;
+            NotifyArmIkRunningChanged(idx, running: true);
+            if (idx == BIK_LH || idx == BIK_RH)
+                SyncShoulderStabilizerEnabledFromArmState("arm-ik-enabled:" + idx);
             _bikEff[idx].GizmoDragging = false;
             _bikEff[idx].HasPostDragHold = false;
             _bikEff[idx].PostDragHoldFrames = 0;
@@ -526,6 +529,9 @@ namespace MainGirlHipHijack
             }
 
             _bikEff[idx].Running = false;
+            NotifyArmIkRunningChanged(idx, running: false);
+            if (idx == BIK_LH || idx == BIK_RH)
+                SyncShoulderStabilizerEnabledFromArmState("arm-ik-disabled:" + idx);
             if (!silent)
             {
                 LogInfo("bodyIK disabled: " + BIK_Labels[idx] + (preserveProxy ? " (proxy preserved)" : ""));
@@ -678,6 +684,14 @@ namespace MainGirlHipHijack
             public Vector3 BonePos;
             public Vector3 ProxyPos;
             public float BoneToProxyDistance;
+            public bool FollowActive;
+            public Transform FollowBone;
+            public Vector3 FollowBonePos;
+            public Vector3 FollowTargetPos;
+            public float FollowTargetToProxyDistance;
+            public float BendAngleDeg;
+            public float BendGoalErrorDeg;
+            public float BendGoalDistance;
         }
 
         private bool ShouldLogBodyIkDiagnostics(out int idx)
@@ -744,12 +758,29 @@ namespace MainGirlHipHijack
             snap.GizmoDragging = state != null && state.GizmoDragging;
             snap.ConfigWeight = GetBodyIKWeight(idx);
             snap.IsBend = idx >= BIK_BEND_START && idx != BIK_BODY;
+            snap.BendAngleDeg = -1f;
+            snap.BendGoalErrorDeg = -1f;
+            snap.BendGoalDistance = -1f;
+            snap.FollowTargetToProxyDistance = -1f;
 
             if (state != null)
             {
                 snap.Proxy = state.Proxy;
                 if (snap.Proxy != null)
                     snap.ProxyPos = snap.Proxy.position;
+
+                if (state.FollowBone != null)
+                {
+                    snap.FollowActive = true;
+                    snap.FollowBone = state.FollowBone;
+                    snap.FollowBonePos = state.FollowBone.position;
+
+                    Quaternion offsetRot = GetFollowOffsetRotation(state.FollowBone);
+                    snap.FollowTargetPos = state.FollowBone.position
+                        + (offsetRot * state.FollowBonePositionOffset);
+                    if (snap.Proxy != null)
+                        snap.FollowTargetToProxyDistance = Vector3.Distance(snap.FollowTargetPos, snap.Proxy.position);
+                }
             }
 
             if (snap.IsBend)
@@ -761,6 +792,24 @@ namespace MainGirlHipHijack
                     snap.SolverPosWeight = bc.weight;
                     snap.SolverRotWeight = -1f;
                     snap.Bone = bc.bone2;
+
+                    if (bc.bone1 != null && bc.bone2 != null && bc.bone3 != null)
+                    {
+                        Vector3 upper = bc.bone1.position - bc.bone2.position;
+                        Vector3 lower = bc.bone3.position - bc.bone2.position;
+                        if (upper.sqrMagnitude > 0.00000001f && lower.sqrMagnitude > 0.00000001f)
+                            snap.BendAngleDeg = Vector3.Angle(upper, lower);
+                    }
+
+                    Transform bendGoalRef = snap.Proxy != null ? snap.Proxy : bc.bendGoal;
+                    if (bc.bone2 != null && bc.bone3 != null && bendGoalRef != null)
+                    {
+                        Vector3 currentDir = bc.bone3.position - bc.bone2.position;
+                        Vector3 goalDir = bendGoalRef.position - bc.bone2.position;
+                        snap.BendGoalDistance = goalDir.magnitude;
+                        if (currentDir.sqrMagnitude > 0.00000001f && goalDir.sqrMagnitude > 0.00000001f)
+                            snap.BendGoalErrorDeg = Vector3.Angle(currentDir, goalDir);
+                    }
                 }
             }
             else
@@ -795,6 +844,8 @@ namespace MainGirlHipHijack
             string verdict = BuildBodyIkDiagVerdict(before, after, skippedByAbandon, hasCarry, carryBone, carryProxy);
             string bindingBefore = before.Binding != null ? before.Binding.name : "null";
             string bindingAfter = after.Binding != null ? after.Binding.name : "null";
+            string followBoneBefore = before.FollowBone != null ? before.FollowBone.name : "null";
+            string followBoneAfter = after.FollowBone != null ? after.FollowBone.name : "null";
 
             string msg = "[BodyIK-DIAG] frame=" + Time.frameCount
                 + " idx=" + before.Index + "(" + before.Label + ")"
@@ -812,8 +863,17 @@ namespace MainGirlHipHijack
                 + " bone(before->after)=" + Vec3(before.BonePos) + "->" + Vec3(after.BonePos)
                 + " proxy(before->after)=" + Vec3(before.ProxyPos) + "->" + Vec3(after.ProxyPos)
                 + " dist(before->after)=" + before.BoneToProxyDistance.ToString("F4") + "->" + after.BoneToProxyDistance.ToString("F4")
-                + " carry(bone/proxy)=" + carryBone.ToString("F4") + "/" + carryProxy.ToString("F4");
-            LogInfo(msg);
+                + " followActive(before->after)=" + before.FollowActive + "->" + after.FollowActive
+                + " followBone(before->after)=" + followBoneBefore + "->" + followBoneAfter
+                + " followBonePos(before->after)=" + Vec3(before.FollowBonePos) + "->" + Vec3(after.FollowBonePos)
+                + " followTarget(before->after)=" + Vec3(before.FollowTargetPos) + "->" + Vec3(after.FollowTargetPos)
+                + " followTargetDist(before->after)=" + before.FollowTargetToProxyDistance.ToString("F4") + "->" + after.FollowTargetToProxyDistance.ToString("F4")
+                + " bendAngleDeg(before->after)=" + before.BendAngleDeg.ToString("F2") + "->" + after.BendAngleDeg.ToString("F2")
+                + " bendGoalErrorDeg(before->after)=" + before.BendGoalErrorDeg.ToString("F2") + "->" + after.BendGoalErrorDeg.ToString("F2")
+                + " bendGoalDist(before->after)=" + before.BendGoalDistance.ToString("F4") + "->" + after.BendGoalDistance.ToString("F4")
+                + " carry(bone/proxy)=" + carryBone.ToString("F4") + "/" + carryProxy.ToString("F4")
+                + " shoulderLink={" + BuildShoulderLinkDiagStateText() + "}";
+            LogBodyIkDiag(msg);
 
             if (after.Bone != null && after.Proxy != null)
             {
@@ -827,6 +887,45 @@ namespace MainGirlHipHijack
             {
                 _lastBodyIkDiagHasPost = false;
             }
+        }
+
+        private void LogBodyIkBendDiagnostics()
+        {
+            LogBodyIkBendDiagnosticFor(BIK_LE);
+            LogBodyIkBendDiagnosticFor(BIK_RE);
+            LogBodyIkBendDiagnosticFor(BIK_LK);
+            LogBodyIkBendDiagnosticFor(BIK_RK);
+        }
+
+        private void LogBodyIkBendDiagnosticFor(int idx)
+        {
+            BodyIkDiagSnapshot snap;
+            if (!TryCaptureBodyIkDiagSnapshot(idx, out snap) || !snap.IsBend)
+                return;
+
+            string binding = snap.Binding != null ? snap.Binding.name : "null";
+            string followBone = snap.FollowBone != null ? snap.FollowBone.name : "null";
+            string msg = "[BodyIK-BEND-DIAG] frame=" + Time.frameCount
+                + " idx=" + snap.Index + "(" + snap.Label + ")"
+                + " want=" + snap.Want
+                + " enabled=" + snap.Enabled
+                + " running=" + snap.Running
+                + " drag=" + snap.GizmoDragging
+                + " bind=" + binding
+                + " bindOwned=" + snap.BindingIsOwnedProxy
+                + " bonePos=" + Vec3(snap.BonePos)
+                + " proxyPos=" + Vec3(snap.ProxyPos)
+                + " boneToProxyDist=" + snap.BoneToProxyDistance.ToString("F4")
+                + " bendAngleDeg=" + snap.BendAngleDeg.ToString("F2")
+                + " bendGoalErrorDeg=" + snap.BendGoalErrorDeg.ToString("F2")
+                + " bendGoalDist=" + snap.BendGoalDistance.ToString("F4")
+                + " followActive=" + snap.FollowActive
+                + " followBone=" + followBone
+                + " followBonePos=" + Vec3(snap.FollowBonePos)
+                + " followTargetPos=" + Vec3(snap.FollowTargetPos)
+                + " followTargetDist=" + snap.FollowTargetToProxyDistance.ToString("F4")
+                + " shoulderLink={" + BuildShoulderLinkDiagStateText() + "}";
+            LogBodyIkDiag(msg);
         }
 
         private static string BuildBodyIkDiagVerdict(
@@ -876,7 +975,10 @@ namespace MainGirlHipHijack
             if (_abandonedByPostureChange)
             {
                 if (doDiag)
+                {
                     LogBodyIkDiagnostics(diagBefore, diagBefore, skippedByAbandon: true);
+                    LogBodyIkBendDiagnostics();
+                }
                 return;
             }
 
@@ -914,6 +1016,7 @@ namespace MainGirlHipHijack
                 BodyIkDiagSnapshot diagAfter;
                 if (TryCaptureBodyIkDiagSnapshot(diagIdx, out diagAfter))
                     LogBodyIkDiagnostics(diagBefore, diagAfter, skippedByAbandon: false);
+                LogBodyIkBendDiagnostics();
             }
         }
 

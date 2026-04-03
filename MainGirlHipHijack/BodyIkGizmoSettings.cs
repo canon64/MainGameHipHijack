@@ -55,6 +55,7 @@ namespace MainGirlHipHijack
 
         // VR時 頭ボーン→HMD変換
         public bool FollowHeadBoneToHmdEnabled = false;
+        public bool FollowAllowAllHeadBonesForSnap = true;
 
         public bool SpeedHijackEnabled = false;
         public bool CutFemaleAnimSpeedEnabled = false;

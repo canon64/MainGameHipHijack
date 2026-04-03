@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
@@ -35,8 +36,14 @@ namespace MainGirlHipHijack
         private const string InputCaptureSourceWindow = "window-drag";
         private const string InputCaptureSourceSlider = "slider-drag";
         private const string InputCaptureSourceScroll = "scroll-drag";
+        private const string ShoulderStabilizerTypeName = "MainGirlShoulderIkStabilizer.ShoulderIkStabilizerPlugin";
+        private const string ShoulderStabilizerAssemblyName = "MainGirlShoulderIkStabilizer";
 
         internal static Plugin Instance { get; private set; }
+
+        // 肩補正側など外部プラグイン向け: 腕IKの実行状態変化通知
+        // idx は BIK_LH / BIK_RH（0/1）を想定。
+        public static event Action<int, bool> ArmIkRunningChanged;
 
         internal const int BIK_LH = 0;
         internal const int BIK_RH = 1;
@@ -126,6 +133,14 @@ namespace MainGirlHipHijack
         private bool _settingsSavePending;
         private float _settingsSaveDueTime;
         private const float SettingsSaveDelaySeconds = 0.25f;
+        private Type _shoulderStabilizerPluginType;
+        private MethodInfo _shoulderSetEnabledFromHipHijackMethod;
+        private bool _shoulderControlResolveLogged;
+        private bool _shoulderLinkLastRequestedEnabled;
+        private bool _shoulderLinkLastAppliedEnabled;
+        private bool _shoulderLinkLastApiResolved;
+        private string _shoulderLinkLastReason = "none";
+        private int _shoulderLinkLastFrame = -1;
         private float _nextStateHeartbeatTime;
         private float _nextBodyIkDiagLogTime;
         private int _lastBodyIkDiagFrame = -1;
@@ -188,6 +203,146 @@ namespace MainGirlHipHijack
             LogInfo("settings=" + Path.Combine(_pluginDir, SettingsStore.FileName));
             LogInfo("uiVisible=" + _settings.UiVisible);
             LogStateSnapshot("awake-init", force: true);
+        }
+
+        public static bool IsArmIkRunning(int idx)
+        {
+            Plugin instance = Instance;
+            if (instance == null)
+                return false;
+            if (idx < BIK_LH || idx > BIK_RH)
+                return false;
+
+            BIKEffectorState state = instance._bikEff[idx];
+            return state != null && state.Running;
+        }
+
+        private static void NotifyArmIkRunningChanged(int idx, bool running)
+        {
+            if (idx != BIK_LH && idx != BIK_RH)
+                return;
+
+            try
+            {
+                ArmIkRunningChanged?.Invoke(idx, running);
+            }
+            catch
+            {
+                // 通知先例外で本体処理を止めない
+            }
+        }
+
+        private void SyncShoulderStabilizerEnabledFromArmState(string reason)
+        {
+            bool anyArmRunning =
+                (_bikEff[BIK_LH] != null && _bikEff[BIK_LH].Running) ||
+                (_bikEff[BIK_RH] != null && _bikEff[BIK_RH].Running);
+            TrySetShoulderStabilizerEnabled(anyArmRunning, reason);
+        }
+
+        private void TrySetShoulderStabilizerEnabled(bool enabled, string reason)
+        {
+            string resolvedReason = string.IsNullOrEmpty(reason) ? "unknown" : reason;
+            _shoulderLinkLastRequestedEnabled = enabled;
+            _shoulderLinkLastReason = resolvedReason;
+            _shoulderLinkLastFrame = Time.frameCount;
+
+            if (!TryResolveShoulderStabilizerApi())
+            {
+                _shoulderLinkLastApiResolved = false;
+                _shoulderLinkLastAppliedEnabled = false;
+                if (_settings != null && _settings.BodyIkDiagnosticLog)
+                    LogBodyIkDiag("[ShoulderLink-DIAG] apiResolved=false req=" + enabled + " reason=" + resolvedReason);
+                return;
+            }
+
+            try
+            {
+                _shoulderLinkLastApiResolved = true;
+                object result = _shoulderSetEnabledFromHipHijackMethod.Invoke(null, new object[] { enabled, resolvedReason });
+                bool applied = !(result is bool b) || b;
+                _shoulderLinkLastAppliedEnabled = applied ? enabled : _shoulderLinkLastAppliedEnabled;
+                if (_settings != null && _settings.DetailLogEnabled)
+                {
+                    LogInfo("[ShoulderLink] enabled=" + enabled + " reason=" + resolvedReason + " applied=" + applied);
+                }
+                if (_settings != null && _settings.BodyIkDiagnosticLog)
+                    LogBodyIkDiag("[ShoulderLink-DIAG] apiResolved=true req=" + enabled + " applied=" + applied + " reason=" + resolvedReason);
+            }
+            catch (Exception ex)
+            {
+                _shoulderLinkLastApiResolved = true;
+                _shoulderLinkLastAppliedEnabled = false;
+                if (_settings != null && _settings.DetailLogEnabled)
+                {
+                    LogWarn("[ShoulderLink] 呼び出し失敗: " + ex.Message);
+                }
+                if (_settings != null && _settings.BodyIkDiagnosticLog)
+                    LogBodyIkDiagWarn("[ShoulderLink-DIAG] invoke failed req=" + enabled + " reason=" + resolvedReason + " error=" + ex.Message);
+            }
+        }
+
+        private bool TryResolveShoulderStabilizerApi()
+        {
+            if (_shoulderSetEnabledFromHipHijackMethod != null)
+            {
+                return true;
+            }
+
+            if (_shoulderStabilizerPluginType == null)
+            {
+                _shoulderStabilizerPluginType = Type.GetType(ShoulderStabilizerTypeName + ", " + ShoulderStabilizerAssemblyName, throwOnError: false);
+                if (_shoulderStabilizerPluginType == null)
+                {
+                    Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                    for (int i = 0; i < assemblies.Length; i++)
+                    {
+                        Type candidate = assemblies[i].GetType(ShoulderStabilizerTypeName, throwOnError: false);
+                        if (candidate != null)
+                        {
+                            _shoulderStabilizerPluginType = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (_shoulderStabilizerPluginType == null)
+            {
+                if (!_shoulderControlResolveLogged && _settings != null && _settings.DetailLogEnabled)
+                {
+                    _shoulderControlResolveLogged = true;
+                    LogWarn("[ShoulderLink] 肩補正プラグイン型が見つからない");
+                }
+
+                return false;
+            }
+
+            _shoulderSetEnabledFromHipHijackMethod = _shoulderStabilizerPluginType.GetMethod(
+                "SetEnabledFromHipHijack",
+                BindingFlags.Public | BindingFlags.Static);
+            if (_shoulderSetEnabledFromHipHijackMethod == null)
+            {
+                if (!_shoulderControlResolveLogged && _settings != null && _settings.DetailLogEnabled)
+                {
+                    _shoulderControlResolveLogged = true;
+                    LogWarn("[ShoulderLink] SetEnabledFromHipHijack APIが見つからない");
+                }
+
+                return false;
+            }
+
+            _shoulderControlResolveLogged = false;
+            return true;
+        }
+
+        private string BuildShoulderLinkDiagStateText()
+        {
+            return "apiResolved=" + _shoulderLinkLastApiResolved
+                + ",reqEnabled=" + _shoulderLinkLastRequestedEnabled
+                + ",appliedEnabled=" + _shoulderLinkLastAppliedEnabled
+                + ",reason=" + (_shoulderLinkLastReason ?? "none")
+                + ",frame=" + _shoulderLinkLastFrame;
         }
 
         private void PreconfigureRelayLogRoutingEarly()
@@ -655,6 +810,26 @@ namespace MainGirlHipHijack
             }
 
             Logger.LogInfo("[" + PluginName + "] " + message);
+        }
+
+        private void LogBodyIkDiag(string message)
+        {
+            if (_settings == null || !_settings.BodyIkDiagnosticLog)
+                return;
+
+            if (!IsFileLogEnabled())
+                _fileLogger.Write("INFO", message);
+            LogInfo(message);
+        }
+
+        private void LogBodyIkDiagWarn(string message)
+        {
+            if (_settings == null || !_settings.BodyIkDiagnosticLog)
+                return;
+
+            if (!IsFileLogEnabled())
+                _fileLogger.Write("WARN", message);
+            LogWarn(message);
         }
 
         private void LogMaleHmdDiag(string message)

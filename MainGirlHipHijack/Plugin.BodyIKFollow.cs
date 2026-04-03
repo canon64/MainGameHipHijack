@@ -164,15 +164,21 @@ namespace MainGirlHipHijack
                 return false;
 
             string boneName = bone.name ?? string.Empty;
-            bool isCheekSub = boneName.StartsWith("cf_J_CheekLow_s_", StringComparison.Ordinal);
-            bool isCf = boneName.StartsWith("cf_j_", StringComparison.Ordinal);
-            bool isCm = boneName.StartsWith("cm_j_", StringComparison.Ordinal);
-            if (!isCf && !isCm && !isCheekSub)
-                return false;
-            if (IsFingerBoneName(boneName))
-                return false;
-            if (IsExcludedBoneName(boneName))
-                return false;
+            bool allowAllHeadBones = _settings != null
+                && _settings.FollowAllowAllHeadBonesForSnap
+                && IsHeadOrAboveBone(bone);
+            if (!allowAllHeadBones)
+            {
+                bool isCheekSub = boneName.StartsWith("cf_J_CheekLow_s_", StringComparison.Ordinal);
+                bool isCf = boneName.StartsWith("cf_j_", StringComparison.Ordinal);
+                bool isCm = boneName.StartsWith("cm_j_", StringComparison.Ordinal);
+                if (!isCf && !isCm && !isCheekSub)
+                    return false;
+                if (IsFingerBoneName(boneName))
+                    return false;
+                if (IsExcludedBoneName(boneName))
+                    return false;
+            }
 
             Transform lowerBoundary = GetLowerBoundaryBone(ikIdx);
             if (lowerBoundary != null && IsSameOrDescendantOf(bone, lowerBoundary))
@@ -286,6 +292,40 @@ namespace MainGirlHipHijack
             }
 
             return false;
+        }
+
+        private static bool IsHeadOrAboveBone(Transform bone)
+        {
+            Transform t = bone;
+            while (t != null)
+            {
+                string n = (t.name ?? string.Empty).ToLowerInvariant();
+                if (IsHeadBoundaryBoneName(n))
+                    return true;
+                if (n.Contains("spine") || n.Contains("chest") || n.Contains("waist")
+                    || n == "cf_j_root" || n == "cm_j_root")
+                    return false;
+                t = t.parent;
+            }
+
+            return false;
+        }
+
+        private static bool IsHeadBoundaryBoneName(string lowerBoneName)
+        {
+            if (string.IsNullOrEmpty(lowerBoneName))
+                return false;
+
+            return lowerBoneName.Contains("head")
+                || lowerBoneName.Contains("neck")
+                || lowerBoneName.Contains("face")
+                || lowerBoneName.Contains("cheek")
+                || lowerBoneName.Contains("jaw")
+                || lowerBoneName.Contains("mouth")
+                || lowerBoneName.Contains("nose")
+                || lowerBoneName.Contains("eye")
+                || lowerBoneName.Contains("brow")
+                || lowerBoneName.Contains("ear");
         }
 
         private static bool IsFingerBoneName(string boneName)
@@ -644,6 +684,17 @@ namespace MainGirlHipHijack
                 if (headToHmd != _settings.FollowHeadBoneToHmdEnabled)
                 {
                     _settings.FollowHeadBoneToHmdEnabled = headToHmd;
+                    SaveSettings();
+                }
+            }
+
+            // 首より上の候補を全許可（検証）
+            {
+                bool allowAllHead = GUILayout.Toggle(_settings.FollowAllowAllHeadBonesForSnap,
+                    new GUIContent("首より上候補を全許可(検証)", "ON中は首より上の骨を除外せず近接追従の候補にする。OFFで従来挙動へ戻る"));
+                if (allowAllHead != _settings.FollowAllowAllHeadBonesForSnap)
+                {
+                    _settings.FollowAllowAllHeadBonesForSnap = allowAllHead;
                     SaveSettings();
                 }
             }
